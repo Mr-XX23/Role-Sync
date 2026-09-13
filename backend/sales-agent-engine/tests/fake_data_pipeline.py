@@ -40,6 +40,8 @@ class FakeDataPipeline:
     requests: list[tuple[str, str, Any]] = field(default_factory=list)
     failures: dict[tuple[str, str], int] = field(default_factory=dict)  # (METHOD, path) → status, once
     forbid_writes: bool = False
+    corrections_allowed: bool = True  # data-pipeline lets only workspace OWNER/ADMIN correct a count
+    movements: list[dict[str, Any]] = field(default_factory=list)  # the stock ledger, oldest first
 
     # ------------------------------------------------------------------ setup
     def add_product(
@@ -96,6 +98,9 @@ class FakeDataPipeline:
                 if variant["sku"] == sku:
                     return variant
         return None
+
+    def _record_movement(self, body: dict[str, Any]) -> httpx.Response:
+        return _movement(self, body)
 
     def paths(self, method: str | None = None) -> list[str]:
         return [path for verb, path, _ in self.requests if method is None or verb == method]
@@ -183,12 +188,33 @@ class FakeDataPipeline:
                 200,
                 {"variant_id": variant["id"], "sku": variant["sku"], "total_available": sum(l["qty_available"] for l in levels), "by_location": levels},
             )
-        if path == f"{catalog}/inventory/set-stock" and method == "POST":
-            level = self.stock.setdefault((body["variant_id"], body["location_id"]), {"on_hand": 0, "reserved": 0})
-            if body["qty"] < level["reserved"]:
-                return _detail(400, "Cannot set qty_on_hand below reserved")
-            level["on_hand"] = body["qty"]
-            return _json(200, {"qty_on_hand": level["on_hand"], "qty_reserved": level["reserved"]})
+        if path == f"{catalog}/inventory/movements" and method == "POST":
+            return self._record_movement(body)
+        if path == f"{catalog}/inventory/movements" and method == "GET":
+            params = request.url.params
+            reasons = params.get_list("reason")
+            items = [
+                entry
+                for entry in reversed(self.movements)
+                if (not params.get("variant_id") or entry["variant_id"] == params["variant_id"])
+                and (not params.get("location_id") or entry["location_id"] == params["location_id"])
+                and (not reasons or entry["reason"] in reasons)
+            ]
+            limit = int(params.get("limit") or 50)
+            return _json(200, {"items": items[:limit], "total": len(items), "limit": limit, "offset": 0})
+        if path == f"{catalog}/inventory/movements/summary" and method == "GET":
+            places = [
+                {
+                    "location_id": location["id"], "location_name": location["name"], "location_type": "WAREHOUSE",
+                    "sellable": location["sellable"],
+                    "qty_on_hand": sum(level["on_hand"] for (_, place), level in self.stock.items() if place == location["id"]),
+                    "qty_reserved": sum(level["reserved"] for (_, place), level in self.stock.items() if place == location["id"]),
+                    "received": sum(e["delta"] for e in self.movements if e["reason"] == "RESTOCK" and e["location_id"] == location["id"]),
+                    "sold": -sum(e["delta"] for e in self.movements if e["reason"] == "SALE" and e["location_id"] == location["id"]),
+                }
+                for location in self.locations
+            ]
+            return _json(200, {"locations": places, "totals": {"movements": len(self.movements)}})
         if path == f"{catalog}/inventory/reserve" and method == "POST":
             variant = self.variant_by_sku(body["sku"])
             if variant is None:
@@ -242,6 +268,75 @@ class FakeDataPipeline:
                 return _detail(404, "Document not found.")
             return _json(200, {"status": "success"})
         return _detail(404, f"no route {method} {path}")
+
+
+def _location_named(pipeline: FakeDataPipeline, location_id: str) -> dict[str, Any]:
+    return next(location for location in pipeline.locations if location["id"] == location_id)
+
+
+def _write(pipeline: FakeDataPipeline, variant: dict[str, Any], location_id: str, delta: int, reason: str, body: dict[str, Any]) -> dict[str, Any]:
+    level = pipeline.stock.setdefault((variant["id"], location_id), {"on_hand": 0, "reserved": 0})
+    level["on_hand"] += delta
+    entry = {
+        "id": str(uuid4()), "variant_id": variant["id"], "sku": variant["sku"], "location_id": location_id,
+        "location_name": _location_named(pipeline, location_id)["name"], "reason": reason, "delta": delta,
+        "type": {"RESTOCK": "RECEIVED", "SALE": "SOLD", "TRANSFER_OUT": "SHIPPED_OUT", "TRANSFER_IN": "SHIPPED_IN",
+                 "DAMAGE": "DAMAGED", "LOST": "LOST", "RETURN": "RETURNED"}.get(reason, "CORRECTION"),
+        "on_hand_after": level["on_hand"], "reference": body.get("reference"), "counterparty": body.get("counterparty"),
+        "note": body.get("note"),
+    }
+    pipeline.movements.append(entry)
+    return entry
+
+
+def _movement(pipeline: FakeDataPipeline, body: dict[str, Any]) -> httpx.Response:
+    """The rules of POST /catalog/inventory/movements (data-pipeline catalog/service.py record_movement)."""
+    variant = next((v for p in pipeline.products.values() for v in p["variants"] if v["id"] == body["variant_id"]), None)
+    if variant is None:
+        return _detail(404, "Variant not found")
+    kind, qty, location_id = body["type"], body["qty"], body["location_id"]
+    location = _location_named(pipeline, location_id)
+    level = pipeline.stock.setdefault((variant["id"], location_id), {"on_hand": 0, "reserved": 0})
+    before = {location_id: level["on_hand"]}
+    if kind == "COUNT_CORRECTION":
+        if not pipeline.corrections_allowed:
+            return _detail(403, "Only workspace owners and admins can correct a stock count")
+        if not (body.get("note") or "").strip():
+            return _detail(400, "Say why the count is being corrected")
+        if body.get("expected_on_hand") is not None and body["expected_on_hand"] != level["on_hand"]:
+            return _detail(409, f"The stock changed: {level['on_hand']} on hand, not {body['expected_on_hand']}")
+        if qty < level["reserved"]:
+            return _detail(400, "The count can't go below reserved units")
+        if qty != level["on_hand"]:
+            _write(pipeline, variant, location_id, qty - level["on_hand"], "ADJUST", body)
+    elif qty < 1:
+        return _detail(400, "Enter a quantity of at least 1")
+    elif kind == "SOLD" and not location["sellable"]:
+        return _detail(400, f"{location['name']} is not a sellable location")
+    elif kind in ("SOLD", "SHIPPED", "DAMAGED", "LOST") and qty > level["on_hand"] - level["reserved"]:
+        return _detail(400, f"Only {level['on_hand'] - level['reserved']} available")
+    elif kind == "RECEIVED":
+        _write(pipeline, variant, location_id, qty, "RESTOCK", body)
+    elif kind in ("SOLD", "DAMAGED", "LOST"):
+        _write(pipeline, variant, location_id, -qty, {"SOLD": "SALE", "DAMAGED": "DAMAGE", "LOST": "LOST"}[kind], body)
+    elif kind == "SHIPPED":
+        target = body["to_location_id"]
+        before[target] = pipeline.stock.get((variant["id"], target), {"on_hand": 0})["on_hand"]
+        _write(pipeline, variant, location_id, -qty, "TRANSFER_OUT", body)
+        _write(pipeline, variant, target, qty, "TRANSFER_IN", body)
+    elif kind == "RETURNED":
+        _write(pipeline, variant, location_id, qty, "RETURN", body)
+        if body.get("resellable") is False:
+            _write(pipeline, variant, location_id, -qty, "DAMAGE", body)
+    levels = [
+        {
+            "location_id": place, "location_name": _location_named(pipeline, place)["name"], "qty_on_hand_before": was,
+            "qty_on_hand": pipeline.stock[(variant["id"], place)]["on_hand"],
+            "qty_reserved": pipeline.stock[(variant["id"], place)]["reserved"], "qty_available": 0,
+        }
+        for place, was in before.items()
+    ]
+    return _json(200, {"type": kind, "ref_id": str(uuid4()), "changed": True, "levels": levels, "movements": []})
 
 
 def stock_of(pipeline: FakeDataPipeline, sku: str, location: str = MAIN_WAREHOUSE) -> dict[str, int]:

@@ -80,7 +80,9 @@ outcome is unknown (timeout, dropped connection) is reported as UNKNOWN and neve
 | `generate_document` | write: docx, pptx, xlsx, pdf or md; undo trashes / deletes the file | rendered in the engine; saved to Google Drive (Composio), else the workspace knowledge vault |
 | `create_quote` | write: catalog prices, per-line discounts within each item's limit, totals, optional stock reservation; undo removes the file and releases stock | data-pipeline catalog + document storage as above |
 | `create_catalog_item`, `update_catalog_item`, `retire_catalog_item` | write; undo retires / restores the replaced values / restores the status | data-pipeline catalog (never hard-deletes) |
-| `set_stock`, `reserve_stock`, `release_stock` | write; undo restores the count / releases the reservation (a release can't be undone) | data-pipeline inventory |
+| `record_stock_movement` | write: received, sold, shipped, damaged, lost or returned stock, checked against available units first; only a shipment can be undone (shipped back once) | data-pipeline inventory movements |
+| `correct_stock_count` | write: replace a count with a note; workspace owners and admins only, refused before approval for anyone else; undo restores the count unless stock moved since | data-pipeline inventory movements |
+| `reserve_stock`, `release_stock` | write; undo releases the reservation (a release can't be undone) | data-pipeline inventory |
 | `create_deal` | write (approval); warns about an open deal for the same customer; undo deletes it unless it changed | workspace-service deals |
 | `update_deal` | write (approval): only the fields it names; re-applies over a concurrent edit; undo restores only fields nobody touched since | workspace-service deals |
 | `remember`, `forget` | memory: saved and deleted without approval, audited; shared memory is closed to viewers | engine `agent.memory` |
@@ -89,7 +91,8 @@ outcome is unknown (timeout, dropped connection) is reported as UNKNOWN and neve
 | `list_calendar_events` | read | Composio Google Calendar |
 | `search_slack_messages` | read | Composio Slack |
 | `search_notion`, `read_notion_page` | read | Composio Notion |
-| `search_knowledge_base`, `read_knowledge_document` | read | data-pipeline knowledge vault (keyword retrieval in the adapter) |
+| `search_knowledge_base`, `read_knowledge_document` | read | data-pipeline knowledge vault: semantic search, with keyword retrieval in the adapter when it is unavailable |
+| `stock_history` | read: movements newest first, with totals per location | data-pipeline inventory movements |
 | `search_catalog`, `check_inventory` | read | data-pipeline catalog |
 | `web_search` | read | Tavily pages + Google Search grounding (Gemini) |
 | `research_prospect` | read | web search, condensed into a cited brief by the low-complexity route (OpenRouter) |

@@ -8,7 +8,8 @@
 - A circuit breaker per tool: after repeated transient failures the tool fails fast for a
   cool-down instead of making every run wait out its timeouts, so one dead tool degrades a
   run instead of stalling it. Errors about the request itself (access, bad input, a business
-  rule) mean the tool answered, so they never trip it.
+  rule) mean the tool answered, so they never trip it; nor does contention (``ToolBusy``), which
+  is retried like a transient failure but says the tool is healthy.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from typing import TypeVar
 
 from app.platform.langgraph_runtime import is_control_flow_signal
 from app.tools.registry import ToolDefinition
-from app.tools.types import ToolFailed, ToolInvocation, ToolKind, ToolOutcomeUnknown, ToolOutput, UndoInvocation
+from app.tools.types import ToolBusy, ToolFailed, ToolInvocation, ToolKind, ToolOutcomeUnknown, ToolOutput, UndoInvocation
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +128,10 @@ class ToolExecutor:
                 if not _is_transient(exc):
                     self._breaker.answered(name)
                     raise
-                self._breaker.failed(name)
+                if isinstance(exc, ToolBusy):
+                    self._breaker.answered(name)  # it answered: busy, not broken
+                else:
+                    self._breaker.failed(name)
                 retryable = isinstance(exc, ToolFailed) and exc.retryable and not isinstance(exc, ToolUnavailable)
                 if not retryable or attempt >= attempts:
                     raise

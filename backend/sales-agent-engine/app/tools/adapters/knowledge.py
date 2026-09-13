@@ -1,15 +1,17 @@
 """Knowledge-base tools over data-pipeline's knowledge vault (shared by the workspace).
 
-data-pipeline has no retrieval endpoint yet (its vector search is a placeholder and its
-document search only matches metadata), so this adapter does keyword retrieval itself:
-rank the workspace's documents by their sales metadata, read the best candidates' text,
-and return the passages that match. When real retrieval lands in data-pipeline, only this
-file changes. data-pipeline enforces workspace membership on every call.
+Search uses data-pipeline's semantic search (``POST /knowledge-vault/search``: an embedded
+query against the workspace's indexed passages, each with the wider context around it). When
+that is unavailable, or finds nothing among the workspace's indexed documents (older documents
+may have no vectors), it falls back to keyword retrieval here: rank documents by their sales
+metadata, read the best candidates' text, and return the passages that match. data-pipeline
+enforces workspace membership on every call.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from typing import Any
 
@@ -20,6 +22,8 @@ from app.tools.adapters.common import clip, pipeline_failure, plural
 from app.tools.registry import ToolDefinition
 from app.tools.types import ToolCategory, ToolInput, ToolInputError, ToolInvocation, ToolKind, ToolOutput, ToolScope
 
+logger = logging.getLogger(__name__)
+
 CATEGORIES = (
     "BATTLECARD",
     "PRICING_PACKAGING",
@@ -29,7 +33,9 @@ CATEGORIES = (
     "CONTRACT_LEGAL",
     "GENERAL_RESOURCE",
 )
-_CANDIDATES = 6  # documents whose text is read per search
+_CANDIDATES = 6  # documents whose text is read per keyword search
+_SEMANTIC_HITS_PER_RESULT = 4  # passages asked for per document wanted, before grouping by document
+_CONTEXT_CHARS = 1_200
 _SCAN_CHARS = 400_000  # of each document's text
 _PASSAGE_CHARS = 700
 _DOCUMENT_CHARS = 15_000
@@ -78,6 +84,13 @@ def knowledge_tools(client: DataPipelineClient) -> list[ToolDefinition]:
         except DataPipelineError as exc:
             raise pipeline_failure(exc) from exc
 
+        semantic = await semantic_search(ctx.user_id, ctx.tenant_id, args, documents)
+        if semantic:
+            return ToolOutput(
+                data={"documents": semantic, "searched": len(documents), "method": "semantic"},
+                summary=f"{plural(len(semantic), 'knowledge-base document')} matching '{args.query}'",
+            )
+
         # Newest first when nothing in the metadata matches: their text may still.
         ranked = sorted(
             (doc for doc in documents if doc.get("doc_id")), key=lambda doc: metadata_score(doc, query_terms), reverse=True
@@ -92,9 +105,40 @@ def knowledge_tools(client: DataPipelineClient) -> list[ToolDefinition]:
         results.sort(key=lambda item: item[0], reverse=True)
         found = [document for _, document in results[: args.max_results]]
         return ToolOutput(
-            data={"documents": found, "searched": len(documents)},
+            data={"documents": found, "searched": len(documents), "method": "keyword"},
             summary=f"{plural(len(found), 'knowledge-base document')} matching '{args.query}'",
         )
+
+    async def semantic_search(user_id: Any, tenant_id: Any, args: SearchKnowledgeArgs, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Documents with their best-matching passages, best first; empty when semantic search can't help."""
+        indexed = {str(doc["doc_id"]): doc for doc in documents if doc.get("doc_id")}
+        if not indexed:
+            return []
+        try:
+            hits = await client.search_knowledge(user_id, tenant_id, args.query, limit=min(50, args.max_results * _SEMANTIC_HITS_PER_RESULT))
+        except DataPipelineError as exc:
+            logger.warning("semantic knowledge search failed (%s); using keyword retrieval", exc)
+            return []  # briefly unavailable: keyword retrieval still answers
+        found: dict[str, dict[str, Any]] = {}
+        for hit in hits or []:  # best first
+            # A hit's doc_id is the pipeline's canonical id ("{workspace}:{source}:{id}"); the vault lists
+            # documents by doc_ref_id. Connector documents are listed under the canonical id itself.
+            doc = indexed.get(str(hit.get("doc_ref_id"))) or indexed.get(str(hit.get("doc_id")))
+            if doc is None:
+                continue  # not indexed any more, or outside the category asked for
+            entry = found.get(str(doc["doc_id"]))
+            if entry is None:
+                if len(found) >= args.max_results:
+                    continue
+                score = hit.get("score")
+                entry = found[str(doc["doc_id"])] = _document(doc, []) | {"score": round(float(score), 3) if score is not None else None}
+            passage = clip(" ".join(str(hit.get("context") or hit.get("text") or "").split()), _CONTEXT_CHARS)
+            if passage and passage not in entry["passages"] and len(entry["passages"]) < 2:
+                entry["passages"].append(passage)
+        if hits and not found and not args.category:
+            # Worth seeing in the logs: hits that match no listed document mean the two ids disagree.
+            logger.warning("semantic knowledge search returned %d hits but none matched an indexed document", len(hits))
+        return list(found.values())
 
     async def read_knowledge_document(invocation: ToolInvocation) -> ToolOutput:
         args = invocation.args
@@ -122,7 +166,7 @@ def knowledge_tools(client: DataPipelineClient) -> list[ToolDefinition]:
             name="search_knowledge_base",
             description=(
                 "Search the workspace's sales knowledge base (battlecards, pricing, case studies, security, product "
-                "specs, contracts). Returns matching documents with relevant passages."
+                "specs, contracts, and files the rep attached) by meaning. Returns matching documents with relevant passages."
             ),
             kind=ToolKind.READ,
             scope=ToolScope.READ,

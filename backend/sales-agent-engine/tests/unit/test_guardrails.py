@@ -14,6 +14,7 @@ from app.tools.executor import CircuitBreaker, ToolExecutor, ToolUnavailable
 from app.tools.registry import ToolDefinition
 from app.tools.types import (
     ToolAccessDenied,
+    ToolBusy,
     ToolCategory,
     ToolFailed,
     ToolInput,
@@ -191,6 +192,19 @@ async def test_errors_about_the_request_never_trip_the_circuit():
     for _ in range(5):
         with pytest.raises(ToolAccessDenied):
             await executor.run(definition, _invocation())
+
+
+async def test_contention_is_retried_but_never_trips_the_circuit():
+    executor, sleeps = _executor(threshold=2)
+    busy = Script(*(ToolBusy("memory is being changed by others right now") for _ in range(5)))
+    definition = _tool(ToolKind.READ, busy)
+
+    with pytest.raises(ToolBusy):
+        await executor.run(definition, _invocation())  # three attempts, all colliding
+    assert busy.calls == 3 and sleeps == [0.5, 1.5]
+    # Five collisions in a row: a threshold-2 breaker would have opened on a real failure.
+    output = await executor.run(definition, _invocation())
+    assert output.summary == "done" and busy.calls == 6
 
 
 def test_a_breaker_probe_that_never_reports_back_stops_blocking_after_a_cool_down():

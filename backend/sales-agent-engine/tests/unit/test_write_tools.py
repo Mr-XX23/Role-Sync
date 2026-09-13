@@ -318,30 +318,111 @@ async def test_an_update_that_changes_nothing_is_refused():
         await _run(update, {"product_id": product["id"], "prices": [{"sku": "PRO-1", "price": 49}]})
 
 
-async def test_stock_is_set_at_a_named_location_and_undo_puts_the_old_count_back():
+async def test_a_member_records_what_happened_to_stock_at_a_named_location():
     pipeline = FakeDataPipeline()
     pipeline.locations.append({"id": STORE, "name": "Downtown store", "sellable": True, "priority": 2})
     pipeline.add_product(name="Tee", sku="TEE-M", price="20.00", on_hand=30, location=STORE)
-    set_stock = _tool(_catalog(pipeline), "set_stock")
+    record = _tool(_catalog(pipeline), "record_stock_movement")
 
-    preview, output = await _run(set_stock, {"sku": "TEE-M", "quantity": 45, "location": "downtown store", "reason": "RESTOCK"})
+    preview, output = await _run(
+        record,
+        {"sku": "TEE-M", "type": "RECEIVED", "quantity": 15, "location": "downtown store", "counterparty": "Acme Supplies", "reference": "PO-7"},
+    )
 
-    assert (preview["before"], preview["after"], preview["location"]) == (30, 45, "Downtown store")
+    assert preview["kind"] == "stock_movement" and not preview["undoable"]
+    assert preview["levels"] == [{"location": "Downtown store", "before": 30, "after": 45}]
+    [sent] = [body for method, path, body in pipeline.requests if path.endswith("/inventory/movements") and method == "POST"]
+    assert sent["type"] == "RECEIVED" and (sent["qty"], sent["counterparty"], sent["reference"]) == (15, "Acme Supplies", "PO-7")
     assert stock_of(pipeline, "TEE-M", STORE)["on_hand"] == 45
-    await _undo(set_stock, output)
-    assert stock_of(pipeline, "TEE-M", STORE)["on_hand"] == 30
+    assert output.undo is None  # stock history can't be edited; a mistake is fixed with a count correction
+    assert "15 × TEE-M received at Downtown store" in output.summary and "30 → 45" in output.summary
 
 
-async def test_stock_changes_need_a_location_when_there_are_several_and_cannot_go_below_reservations():
+async def test_selling_or_writing_off_stock_needs_available_units_and_a_sellable_location():
+    pipeline = FakeDataPipeline()
+    pipeline.locations.append({"id": STORE, "name": "Back room", "sellable": False, "priority": 2})
+    pipeline.add_product(name="Tee", sku="TEE-M", price="20.00", on_hand=30)
+    tools = _catalog(pipeline)
+    record = _tool(tools, "record_stock_movement")
+    with pytest.raises(ToolInputError, match="say which stock location"):
+        await _run(record, {"sku": "TEE-M", "type": "SOLD", "quantity": 5})
+    await _run(_tool(tools, "reserve_stock"), {"sku": "TEE-M", "quantity": 20, "location": "Main warehouse"})
+    with pytest.raises(ToolInputError, match=r"only 10 × TEE-M available at Main warehouse \(30 on hand, 20 reserved\)"):
+        await _run(record, {"sku": "TEE-M", "type": "DAMAGED", "quantity": 15, "location": "Main warehouse"})
+    with pytest.raises(ToolInputError, match="isn't a sellable location"):
+        await _run(record, {"sku": "TEE-M", "type": "SOLD", "quantity": 1, "location": "Back room"})
+    with pytest.raises(ValueError, match="SHIPPED needs to_location"):
+        record.input_model.model_validate({"sku": "TEE-M", "type": "SHIPPED", "quantity": 1})
+
+    preview, _ = await _run(record, {"sku": "TEE-M", "type": "RETURNED", "quantity": 2, "location": "Main warehouse", "resellable": False})
+    assert preview["levels"] == [{"location": "Main warehouse", "before": 30, "after": 30}]  # returned, then written off
+
+
+async def test_a_shipment_moves_stock_between_locations_and_undo_ships_it_back_once():
     pipeline = FakeDataPipeline()
     pipeline.locations.append({"id": STORE, "name": "Downtown store", "sellable": True, "priority": 2})
     pipeline.add_product(name="Tee", sku="TEE-M", price="20.00", on_hand=30)
+    record = _tool(_catalog(pipeline), "record_stock_movement")
+
+    preview, output = await _run(record, {"sku": "TEE-M", "type": "SHIPPED", "quantity": 8, "location": "Main warehouse", "to_location": "Downtown store"})
+
+    assert preview["levels"] == [
+        {"location": "Main warehouse", "before": 30, "after": 22},
+        {"location": "Downtown store", "before": 0, "after": 8},
+    ]
+    assert (stock_of(pipeline, "TEE-M")["on_hand"], stock_of(pipeline, "TEE-M", STORE)["on_hand"]) == (22, 8)
+    assert "back from Downtown store to Main warehouse" in await _undo(record, output)
+    assert (stock_of(pipeline, "TEE-M")["on_hand"], stock_of(pipeline, "TEE-M", STORE)["on_hand"]) == (30, 0)
+    # An undo step is retried when no answer comes back: running it again must not ship twice.
+    assert "already shipped back" in await _undo(record, output)
+    assert stock_of(pipeline, "TEE-M")["on_hand"] == 30
+
+
+async def test_only_owners_and_admins_correct_a_count_and_undo_restores_it_unless_stock_moved():
+    pipeline = FakeDataPipeline()
+    pipeline.add_product(name="Tee", sku="TEE-M", price="20.00", on_hand=30)
+    correction = {"sku": "TEE-M", "counted_quantity": 27, "expected_on_hand": 30, "note": "Shelf count after the stocktake"}
+
+    with pytest.raises(ToolAccessDenied, match="only workspace owners and admins"):
+        await _run(_tool(_catalog(pipeline, role="MEMBER"), "correct_stock_count"), correction)
+    assert not [path for method, path, _ in pipeline.requests if method == "POST"]  # refused before approval
+
+    correct = _tool(_catalog(pipeline, role="ADMIN"), "correct_stock_count")
+    with pytest.raises(ToolInputError, match="now has 30 on hand at Main warehouse, not 31"):
+        await _run(correct, {**correction, "expected_on_hand": 31})
+    preview, output = await _run(correct, correction)
+    assert (preview["kind"], preview["before"], preview["after"], preview["reason"]) == ("stock_change", 30, 27, "COUNT CORRECTION")
+    [sent] = [body for method, path, body in pipeline.requests if method == "POST" and path.endswith("/movements")]
+    assert sent == {"type": "COUNT_CORRECTION", "variant_id": pipeline.variant_by_sku("TEE-M")["id"], "location_id": MAIN_WAREHOUSE,
+                    "qty": 27, "expected_on_hand": 30, "note": "Shelf count after the stocktake"}
+    assert stock_of(pipeline, "TEE-M")["on_hand"] == 27
+
+    assert "set back to 30" in await _undo(correct, output)
+    assert "already back at 30" in await _undo(correct, output)
+
+    _, again = await _run(correct, {**correction, "counted_quantity": 25}, call_id="c2")
+    await _run(_tool(_catalog(pipeline, role="ADMIN"), "record_stock_movement"), {"sku": "TEE-M", "type": "SOLD", "quantity": 2}, call_id="c3")
+    with pytest.raises(ToolFailed, match="changed since the correction"):
+        await _undo(correct, again)
+    assert stock_of(pipeline, "TEE-M")["on_hand"] == 23  # the later sale was kept
+
+
+async def test_stock_history_filters_by_sku_and_kind_of_movement():
+    pipeline = FakeDataPipeline()
+    pipeline.add_product(name="Tee", sku="TEE-M", price="20.00", on_hand=30)
+    pipeline.add_product(name="Cap", sku="CAP-1", price="10.00", on_hand=5)
     tools = _catalog(pipeline)
-    with pytest.raises(ToolInputError, match="say which stock location"):
-        await _run(_tool(tools, "set_stock"), {"sku": "TEE-M", "quantity": 10})
-    await _run(_tool(tools, "reserve_stock"), {"sku": "TEE-M", "quantity": 20})
-    with pytest.raises(ToolInputError, match="reserved"):
-        await _run(_tool(tools, "set_stock"), {"sku": "TEE-M", "quantity": 10, "location": "Main warehouse"})
+    record = _tool(tools, "record_stock_movement")
+    await _run(record, {"sku": "TEE-M", "type": "RECEIVED", "quantity": 10}, call_id="a")
+    await _run(record, {"sku": "TEE-M", "type": "SOLD", "quantity": 4, "counterparty": "Acme"}, call_id="b")
+    await _run(record, {"sku": "CAP-1", "type": "SOLD", "quantity": 1}, call_id="c")
+
+    history = _tool(tools, "stock_history")
+    assert history.kind.value == "READ" and history.acl is None
+    output = await history.handler(ToolInvocation(CTX, "research", "h1", history.input_model.model_validate({"sku": "TEE-M", "types": ["SOLD"]})))
+
+    assert [(m["type"], m["change"], m["counterparty"]) for m in output.data["movements"]] == [("SOLD", -4, "Acme")]
+    assert output.data["total"] == 1 and "1 stock movement for TEE-M" in output.summary
 
 
 async def test_a_reservation_is_undone_by_releasing_it_once():
