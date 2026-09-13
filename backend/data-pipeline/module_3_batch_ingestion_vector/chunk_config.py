@@ -14,6 +14,7 @@ registered - which is what unit tests and standalone use get.
 Config (env, all optional):
   CHUNK_SIZE            default 512 characters per chunk
   CHUNK_OVERLAP_PERCENT default 12 (percent of chunk_size carried between chunks)
+  PARENT_CHUNK_SIZE     default 4x the chunk size (the context returned with a match)
 """
 from __future__ import annotations
 
@@ -25,6 +26,10 @@ from typing import Any, Callable, Optional
 # never produce a chunker the embedding step cannot handle.
 MIN_CHUNK_SIZE, MAX_CHUNK_SIZE = 128, 2048
 MAX_OVERLAP_PERCENT = 30
+# A parent is the context returned with a match, so it should be several children
+# wide - but it is handed to a model, so it cannot grow without limit.
+DEFAULT_PARENT_MULTIPLIER = 4
+MAX_PARENT_SIZE = 8000
 
 
 def _env_int(name: str, default: int) -> int:
@@ -81,3 +86,13 @@ def resolve_chunk_config(tenant_id: str = "", user_id: str = "") -> ChunkConfig:
     size = _clamp(int(stored.get("chunk_size") or fallback.chunk_size), MIN_CHUNK_SIZE, MAX_CHUNK_SIZE)
     percent = _clamp(int(stored.get("overlap") or 0), 0, MAX_OVERLAP_PERCENT)
     return ChunkConfig(chunk_size=size, chunk_overlap=size * percent // 100)
+
+
+def parent_size_for(chunk_size: int) -> int:
+    """Width of the parent span that children of this size are grouped into.
+
+    Never smaller than one child, so every parent holds at least a whole chunk.
+    """
+    configured = _env_int("PARENT_CHUNK_SIZE", 0)
+    size = configured if configured > 0 else chunk_size * DEFAULT_PARENT_MULTIPLIER
+    return _clamp(size, max(1, chunk_size), max(chunk_size, MAX_PARENT_SIZE))

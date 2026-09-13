@@ -1,7 +1,7 @@
 import asyncio
 import inspect
 import os
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent, EventType
 from module_1_document_processing.security.security_scanner import SecurityScanner, ScanResult
 from module_1_document_processing.pipeline.canonical_store import CanonicalStore
@@ -15,10 +15,22 @@ from module_1_document_processing.pipeline import ingestion_guards as guards
 from module_1_document_processing.pipeline.durable_queue import DurableQueue, Job, ingest_queue
 from module_1_document_processing.pipeline.job_payloads import (
     JOB_CONNECTOR_EVENT,
+    JOB_DOCUMENT_EMBED,
+    OUTCOME_DONE,
+    OUTCOME_EMBED_QUEUED,
+    OUTCOME_HELD,
     discard_staged_bytes,
     event_to_payload,
     payload_to_event,
 )
+
+def _run_embed_job(payload: dict[str, Any]) -> None:
+    """Default embed handler, imported lazily: the knowledge-vault module imports
+    ingestion components that must not be loaded while this module initialises."""
+    from module_1_document_processing.knowledge_vault_routes import process_embed_job
+
+    process_embed_job(payload)
+
 
 class QueueWorker:
     """Asynchronous Queue Worker for offloading incoming webhooks and backfill items to the staging, parsing, gatekeeper, ingestion, deletion & ACL sync pipeline."""
@@ -49,6 +61,11 @@ class QueueWorker:
         self.queue = queue if queue is not None else ingest_queue
         self._handlers: dict[str, Callable[[dict[str, Any]], Any]] = {
             JOB_CONNECTOR_EVENT: self._handle_connector_event,
+            # The connector path emits embed jobs, so the worker must be able to
+            # run them without relying on main.py to wire the handler in. Without
+            # this default, any worker built without that wiring dead-lettered
+            # the embedding of every connector document.
+            JOB_DOCUMENT_EMBED: _run_embed_job,
         }
         # Called when a job kind has exhausted its retries, so the owning module
         # can record the outcome instead of leaving a record stuck mid-flight.
@@ -177,7 +194,22 @@ class QueueWorker:
 
     async def _handle_connector_event(self, payload: dict[str, Any]) -> None:
         event = payload_to_event(payload)
-        await self._process_event(event)
+        outcome = await self._process_event(event, skip_gatekeeper=bool(payload.get("skip_gatekeeper")))
+
+        if outcome == OUTCOME_HELD:
+            # Keep the staged bytes and record how to replay: releasing the hold
+            # puts this same event back on the queue.
+            from module_2_memory_gatekeeper.gatekeeper_store import gatekeeper_store
+
+            replay_payload = {k: v for k, v in payload.items() if k != "skip_gatekeeper"}
+            await asyncio.to_thread(
+                gatekeeper_store.attach_replay,
+                f"{event.tenant_id}:{event.source}:{event.external_id}",
+                {"kind": JOB_CONNECTOR_EVENT, "payload": replay_payload},
+                event.tenant_id,
+            )
+            return
+
         # Only on success. Discarding in a `finally` would destroy the bytes a
         # retry needs, turning the first transient failure into a permanent one.
         discard_staged_bytes(payload.get("staged_ref") or "")
@@ -191,9 +223,7 @@ class QueueWorker:
                 return str(value)[:200]
         return event.external_id or doc_id
 
-    def _register_connector_document(
-        self, event: CanonicalEvent, parsed_doc, chunks_written: int
-    ) -> None:
+    def _register_connector_document(self, event: CanonicalEvent, parsed_doc) -> str:
         """Persist parsed text, classify, and add a vault registry row.
 
         Connector documents previously reached the vector store without any of
@@ -212,17 +242,7 @@ class QueueWorker:
             doc_id = f"{event.tenant_id}:{event.source}:{event.external_id}"
             text_content = parsed_doc.text_content or ""
             if not text_content:
-                return
-
-            # chunks_written == 0 is ambiguous: either nothing was indexable, or
-            # the delta check skipped chunks that are already indexed. Ask the
-            # index which it is, so a re-sync of unchanged content is not
-            # reported to the user as "Rejected".
-            effective_chunks = chunks_written
-            if effective_chunks <= 0:
-                from module_3_batch_ingestion_vector.pgvector_index import pgvector_index
-
-                effective_chunks = len(pgvector_index.list_chunks(doc_id) or [])
+                return "empty"
 
             name = self._display_name(event, doc_id)
             classification = vault.sales_classifier.classify(
@@ -246,7 +266,7 @@ class QueueWorker:
                 target_industry=classification.target_industry,
                 sales_summary=classification.sales_summary,
                 sales_tags=classification.sales_tags,
-                total_chunks=effective_chunks,
+                total_chunks=0,
                 parser_used=parsed_doc.parser_used,
                 parse_status=parsed_doc.parse_status,
                 metadata=parsed_doc.metadata,
@@ -262,8 +282,11 @@ class QueueWorker:
                 "name": name,
                 "type": (event.source or "CONNECTOR").upper(),
                 "size_bytes": len(text_content),
-                "chunks": effective_chunks,
-                "status": "Indexed" if effective_chunks > 0 else "Rejected",
+                # Embedding runs as its own job and sets the final status; until
+                # then the document is still in progress, which the vault shows
+                # (and polls) as Parsing.
+                "chunks": existing.get("chunks", 0),
+                "status": "Parsing",
                 "category": classification.category,
                 "target_competitor": classification.target_competitor,
                 "target_industry": classification.target_industry,
@@ -289,11 +312,15 @@ class QueueWorker:
             }
             vault._save_doc_record(record)
             print(f"[QueueWorker] Registered connector document {doc_id} ({classification.category}).")
+            return "persisted"
         except Exception as err:
-            # Registration is best-effort: never fail an otherwise good ingest.
+            # This step now persists the text the embedding job reads. Swallowing
+            # a failure here would queue an embed job with nothing to embed, so it
+            # is reported and the connector event is retried instead.
             print(f"[QueueWorker] Could not register connector document: {err}")
+            return "failed"
 
-    async def _process_event(self, event: CanonicalEvent) -> None:
+    async def _process_event(self, event: CanonicalEvent, skip_gatekeeper: bool = False) -> str:
         print(f"[QueueWorker] Processing event_id={event.event_id} type={event.event_type} from source={event.source}")
         doc_id = f"{event.tenant_id}:{event.source}:{event.external_id}"
 
@@ -302,7 +329,7 @@ class QueueWorker:
         if not scan_res.is_safe:
             print(f"[QueueWorker] Security scan failed for event_id={event.event_id}: {scan_res.reason}")
             self.store.record_event(event, status="QUARANTINED")
-            return
+            return OUTCOME_DONE
 
         sanitized_event = scan_res.event or event
 
@@ -316,17 +343,17 @@ class QueueWorker:
             if not payload_scan.is_safe:
                 print(f"[QueueWorker] Rejected payload for event_id={event.event_id}: {payload_scan.reason}")
                 self.store.record_event(sanitized_event, status="QUARANTINED")
-                return
+                return OUTCOME_DONE
 
         # Handle DELETION events
         if sanitized_event.event_type == EventType.DELETE:
             self.deletion_handler.process_deletion(sanitized_event)
-            return
+            return OUTCOME_DONE
 
         # Handle ACL_CHANGE events
         if sanitized_event.event_type == EventType.ACL_CHANGE:
             self.acl_sync.process_acl_change(sanitized_event)
-            return
+            return OUTCOME_DONE
 
         # 2. Stage Event Lineage
         self.store.record_event(sanitized_event, status="STAGED")
@@ -342,23 +369,31 @@ class QueueWorker:
         if parsed_doc.parse_status == MEDIA_PENDING:
             print(f"[QueueWorker] Media parked for doc_id={doc_id} (transcription not implemented).")
             self.store.record_event(sanitized_event, status="MEDIA_PENDING")
-            return
+            return OUTCOME_DONE
 
         if parsed_doc.parse_status not in ("SUCCESS", "PARTIAL_SUCCESS"):
             print(f"[QueueWorker] Parsing failed for doc_id={doc_id}: status={parsed_doc.parse_status}")
             self.store.record_event(sanitized_event, status="PARSED_FAILED")
-            return
+            return OUTCOME_DONE
 
         print(f"[QueueWorker] Parsed doc_id={doc_id} using '{parsed_doc.parser_used}' (Status: {parsed_doc.parse_status}, Content length: {len(parsed_doc.text_content)})")
         self.store.record_event(sanitized_event, status="PARSED_SUCCESS")
 
         # 4. Memory Gatekeeper Evaluation
-        gk_decision = self.gatekeeper_engine.evaluate_document(parsed_doc)
-        print(f"[QueueWorker] Gatekeeper evaluation for doc_id={doc_id}: Decision={gk_decision.decision}, Category={gk_decision.category.value}")
+        if skip_gatekeeper:
+            # A person released this hold. Evaluating it again would reject it
+            # again, so the bypass is audited instead.
+            await asyncio.to_thread(guards.record_gatekeeper_override, parsed_doc)
+        else:
+            # The gatekeeper includes a live semantic-scorer call, so it runs off
+            # the event loop like parsing does. Called inline, it stalled every
+            # other request for the length of that call.
+            gk_decision = await asyncio.to_thread(self.gatekeeper_engine.evaluate_document, parsed_doc)
+            print(f"[QueueWorker] Gatekeeper evaluation for doc_id={doc_id}: Decision={gk_decision.decision}, Category={gk_decision.category.value}")
 
-        if gk_decision.decision != "ACCEPTED":
-            self.store.record_event(sanitized_event, status=f"GATEKEEPER_{gk_decision.decision}")
-            return
+            if gk_decision.decision != "ACCEPTED":
+                self.store.record_event(sanitized_event, status=f"GATEKEEPER_{gk_decision.decision}")
+                return OUTCOME_HELD
 
         self.store.record_event(sanitized_event, status="GATEKEEPER_ACCEPTED")
 
@@ -371,19 +406,34 @@ class QueueWorker:
             if marker not in parsed_doc.acl:
                 parsed_doc.acl.append(marker)
 
-        # 5. Module 3 Batch Ingestion Pipeline (Chunker -> Delta Hash -> Embedder -> VectorStore)
-        vectors_written = await asyncio.to_thread(
-            self.ingestion_pipeline.process_accepted_document, parsed_doc
-        )
-        print(f"[QueueWorker] Ingestion pipeline complete for doc_id={doc_id}: Upserted {vectors_written} vectors into VectorStore.")
+        # 5. Persist the text and classify. This is the embedding stage's input,
+        # so if it fails the event is retried rather than queuing an empty job.
+        registered = await asyncio.to_thread(self._register_connector_document, sanitized_event, parsed_doc)
+        if registered == "empty":
+            self.store.record_event(sanitized_event, status="PARSED_EMPTY")
+            return OUTCOME_DONE
+        if registered != "persisted":
+            raise RuntimeError(f"Could not persist connector document {doc_id}; will retry")
 
-        # 5b. Give connector documents the same treatment as manual uploads:
-        # retain the parsed text, classify them, and register them in the vault
-        # so they are not merely searchable-but-invisible.
-        await asyncio.to_thread(
-            self._register_connector_document, sanitized_event, parsed_doc, vectors_written
+        # 6. Embedding is its own job: a failure there retries only the embedding,
+        # not the parse and the semantic scorer call above.
+        await self.enqueue_job(
+            JOB_DOCUMENT_EMBED,
+            {
+                "doc_id": doc_id,
+                "canonical_doc_id": doc_id,
+                "text_ref": doc_id,
+                "external_id": sanitized_event.external_id,
+                "tenant_id": sanitized_event.tenant_id,
+                "user_id": sanitized_event.user_id,
+                "source": sanitized_event.source,
+                "mime_type": parsed_doc.mime_type or "text/plain",
+                "acl": list(parsed_doc.acl or []),
+                "parser_used": parsed_doc.parser_used,
+                "parse_status": parsed_doc.parse_status,
+                "metadata": parsed_doc.metadata,
+            },
         )
-
-        # 6. Mark Lineage Complete
-        self.store.record_event(sanitized_event, status="VECTOR_STORE_INDEXED")
-        print(f"[QueueWorker] Event event_id={event.event_id} completed full end-to-end pipeline! Final Status=VECTOR_STORE_INDEXED")
+        self.store.record_event(sanitized_event, status="EMBEDDING_QUEUED")
+        print(f"[QueueWorker] Event event_id={event.event_id} parsed and gated; embedding queued for doc_id={doc_id}.")
+        return OUTCOME_EMBED_QUEUED

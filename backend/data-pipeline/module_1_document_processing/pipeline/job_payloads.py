@@ -24,6 +24,15 @@ from module_1_document_processing.raw_object_store import raw_object_store
 STAGING_PREFIX = "staging"
 JOB_CONNECTOR_EVENT = "connector_event"
 JOB_DOCUMENT_INGEST = "document_ingest"
+# Embedding runs as its own job so a failure there retries only the embedding,
+# not the parse and classifier calls that already succeeded.
+JOB_DOCUMENT_EMBED = "document_embed"
+
+# What a parse/classify stage concluded, so its caller knows whether the staged
+# bytes are still needed. Shared by the upload and connector paths.
+OUTCOME_DONE = "done"                  # finished; nothing further to run
+OUTCOME_HELD = "held"                  # kept out by the gatekeeper; keep bytes for replay
+OUTCOME_EMBED_QUEUED = "embed_queued"  # text persisted, embedding queued as its own job
 
 
 def stage_bytes(tenant_id: str, doc_id: str, data: bytes, content_type: str = "") -> Optional[str]:

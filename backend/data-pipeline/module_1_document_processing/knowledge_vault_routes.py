@@ -20,10 +20,16 @@ except ImportError:
 from module_1_document_processing.parsing.parser_service import ParserService
 from module_1_document_processing.classification.sales_classifier import SalesClassifier, VALID_SALES_CATEGORIES
 from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent, EventType
+from module_1_document_processing.parsing.parsed_document import ParsedDocument
 from module_1_document_processing.raw_document_store import raw_document_store
 from module_1_document_processing.pipeline.durable_queue import ingest_queue
+from module_2_memory_gatekeeper.gatekeeper_store import gatekeeper_store
 from module_1_document_processing.pipeline.job_payloads import (
+    JOB_DOCUMENT_EMBED,
     JOB_DOCUMENT_INGEST,
+    OUTCOME_DONE,
+    OUTCOME_EMBED_QUEUED,
+    OUTCOME_HELD,
     discard_staged_bytes,
     load_staged_bytes,
     stage_bytes,
@@ -31,11 +37,11 @@ from module_1_document_processing.pipeline.job_payloads import (
 from module_1_document_processing.pipeline import ingestion_guards as guards
 from module_1_document_processing.pipeline.canonical_store import CanonicalStore
 from module_1_document_processing.parsing.media_queue import MEDIA_PENDING
-from module_3_batch_ingestion_vector.chunker import HierarchicalChunker
 from module_3_batch_ingestion_vector.delta_checker import VersionedHashDB
 from module_3_batch_ingestion_vector.embedding_worker import EmbeddingWorker
 from module_3_batch_ingestion_vector.vector_store import VectorStore
 from module_3_batch_ingestion_vector.pgvector_index import pgvector_index
+from module_3_batch_ingestion_vector.parent_store import parent_store
 from module_3_batch_ingestion_vector.ingestion_pipeline import BatchIngestionPipeline
 
 # The knowledge vault is shared by a workspace, like the catalog. Every route requires the
@@ -365,7 +371,8 @@ def _process_document_background(
     source: str,
     user_override_category: Optional[str] = None,
     user_override_competitor: Optional[str] = None,
-):
+    skip_gatekeeper: bool = False,
+) -> str:
     """
     Parses document through ParserService (LlamaParse/LlamaIndex with local OCR fallback),
     runs SalesClassifier (OpenRouter AI with local heuristic fallback) to categorize the collateral,
@@ -407,7 +414,7 @@ def _process_document_background(
                 record["error_message"] = guards.MEDIA_PENDING_MESSAGE
                 record["last_updated"] = datetime.now(timezone.utc).isoformat()
                 _save_doc_record(record)
-            return
+            return OUTCOME_DONE
 
         if parsed_doc.parse_status == "FAILED":
             canonical_store.record_event(event, status="PARSED_FAILED")
@@ -418,24 +425,29 @@ def _process_document_background(
                 record["error_message"] = guards.PARSE_FAILED_MESSAGE
                 record["last_updated"] = datetime.now(timezone.utc).isoformat()
                 _save_doc_record(record)
-            return
+            return OUTCOME_DONE
 
         canonical_store.record_event(event, status="PARSED_SUCCESS")
 
         # 3b. Memory gatekeeper - the same quality gate the connector path applies.
-        # Manual uploads previously bypassed this entirely.
-        gate = guards.evaluate_gatekeeper(parsed_doc)
-        if gate.decision != "ACCEPTED":
-            canonical_store.record_event(event, status=f"GATEKEEPER_{gate.decision}")
-            print(f"[KnowledgeVault] Gatekeeper {gate.decision} for {doc_id}: {gate.reason}")
-            record = _find_doc_record(doc_id)
-            if record:
-                record["status"] = "Rejected"
-                record["chunks"] = 0
-                record["error_message"] = guards.gatekeeper_message(gate)
-                record["last_updated"] = datetime.now(timezone.utc).isoformat()
-                _save_doc_record(record)
-            return
+        if skip_gatekeeper:
+            # A person reviewed this hold and released it. Evaluating it again
+            # would reject it again, so replay would loop forever. The override
+            # is recorded, so the audit trail shows who let it through and why.
+            guards.record_gatekeeper_override(parsed_doc)
+        else:
+            gate = guards.evaluate_gatekeeper(parsed_doc)
+            if gate.decision != "ACCEPTED":
+                canonical_store.record_event(event, status=f"GATEKEEPER_{gate.decision}")
+                print(f"[KnowledgeVault] Gatekeeper {gate.decision} for {doc_id}: {gate.reason}")
+                record = _find_doc_record(doc_id)
+                if record:
+                    record["status"] = "Rejected"
+                    record["chunks"] = 0
+                    record["error_message"] = guards.gatekeeper_message(gate)
+                    record["last_updated"] = datetime.now(timezone.utc).isoformat()
+                    _save_doc_record(record)
+                return OUTCOME_HELD
 
         canonical_store.record_event(event, status="GATEKEEPER_ACCEPTED")
 
@@ -485,39 +497,13 @@ def _process_document_background(
             source=source,
         )
 
-        # 5. Chunk settings are resolved from this workspace's RAG config inside
-        # the chunker itself, so the connector path applies the same ones instead
-        # of falling back to library defaults.
-        embedding_worker = EmbeddingWorker(model_name=embedding_engine)
-        batch_pipeline = BatchIngestionPipeline(embedding_worker=embedding_worker)
-
-        # 6. Process through the batch ingestion pipeline (chunking, delta check, embedding, vector store upsert)
-        written_count = batch_pipeline.process_document(parsed_doc)
-
-        # 6b. Update raw_document_store with generated chunk IDs
-        chunk_ids = [f"{parsed_doc.doc_id}_chunk_{i}" for i in range(written_count)]
-        raw_document_store.update_chunks(doc_id, total_chunks=written_count, chunk_ids=chunk_ids)
-
-        # 6c. A document that produced no vector chunks was parsed to empty text (image-only
-        # PDF, blank file, or a transient parser miss). Flag it as an error instead of leaving
-        # a "healthy" Indexed row with 0 chunks — re-uploading the same file repairs it in place.
-        if written_count <= 0:
-            record = _find_doc_record(doc_id)
-            if record:
-                record["status"] = "Error"
-                record["chunks"] = 0
-                record["error_message"] = guards.NO_CONTENT_MESSAGE
-                record["last_updated"] = datetime.now(timezone.utc).isoformat()
-                _save_doc_record(record)
-            print(f"[KnowledgeVault] {doc_id} produced 0 chunks; marked as Error (no extractable text).")
-            return
-
-        # 7. Update document record to Indexed with full sales intelligence metadata
+        # 5. The text is now persisted, so the expensive work above is done for good.
+        # Record the classification, then queue embedding as a separate job: if
+        # embedding fails and is retried, it must not re-run the parser and the
+        # classifier, which already succeeded and each cost a paid call.
         record = _find_doc_record(doc_id)
         if record:
-            record["status"] = "Indexed"
             record["doc_ref_id"] = doc_id
-            record["chunks"] = written_count
             record["category"] = classification.category
             record["document_type"] = classification.category
             record["target_competitor"] = classification.target_competitor
@@ -530,8 +516,7 @@ def _process_document_background(
             record["character_count"] = len(parsed_doc.text_content or "")
             record["has_raw_document"] = True
             record["last_updated"] = datetime.now(timezone.utc).isoformat()
-            if "metadata" not in record:
-                record["metadata"] = {}
+            record.setdefault("metadata", {})
             record["metadata"]["doc_ref_id"] = doc_id
             record["metadata"]["category"] = classification.category
             record["metadata"]["document_type"] = classification.category
@@ -543,8 +528,26 @@ def _process_document_background(
             record["metadata"]["preview_snippet"] = (parsed_doc.text_content[:240] if parsed_doc.text_content else "").strip()
             _save_doc_record(record)
 
-        canonical_store.record_event(event, status="VECTOR_STORE_INDEXED")
-        print(f"[KnowledgeVault] Successfully indexed {doc_id} via BatchIngestionPipeline with {written_count} chunks.")
+        ingest_queue.enqueue(
+            JOB_DOCUMENT_EMBED,
+            {
+                "doc_id": doc_id,
+                "canonical_doc_id": parsed_doc.doc_id,
+                "text_ref": doc_id,
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "source": source,
+                "mime_type": parsed_doc.mime_type or mime_type,
+                "acl": list(parsed_doc.acl or []),
+                "parser_used": parsed_doc.parser_used,
+                "parse_status": parsed_doc.parse_status,
+                "metadata": parsed_doc.metadata,
+                "embedding_engine": embedding_engine,
+            },
+        )
+        canonical_store.record_event(event, status="EMBEDDING_QUEUED")
+        print(f"[KnowledgeVault] {doc_id} parsed and classified; embedding queued as its own job.")
+        return OUTCOME_EMBED_QUEUED
 
     except Exception as err:
         # Re-raised so the ingestion queue retries the document. Swallowing it
@@ -554,6 +557,84 @@ def _process_document_background(
         # on a later attempt never shows a failure the user has to act on.
         print(f"[KnowledgeVault] Pipeline failure for {doc_id}: {err}")
         raise
+
+
+
+def _indexed_chunk_count(canonical_doc_id: str) -> int:
+    """How many chunks the index already holds for a document."""
+    try:
+        if pgvector_index is not None and pgvector_index.available():
+            return len(pgvector_index.list_chunks(canonical_doc_id) or [])
+    except Exception as err:
+        print(f"[KnowledgeVault] Could not count indexed chunks for {canonical_doc_id}: {err}")
+    return 0
+
+
+def process_embed_job(payload: dict) -> None:
+    """Queue handler for the embedding stage.
+
+    Reloads the persisted text instead of the original bytes, so a retry costs
+    one embeddings call - not another LlamaParse and classifier call as it did
+    when the whole document was a single job. Raises on failure so the queue
+    retries it and, after the last attempt, dead-letters it.
+    """
+    doc_id = payload.get("doc_id", "")
+    text = raw_document_store.get_full_text(payload.get("text_ref") or doc_id)
+    if not text:
+        raise RuntimeError(f"Persisted text missing for {doc_id}; cannot embed")
+
+    parsed_doc = ParsedDocument(
+        doc_id=payload.get("canonical_doc_id") or doc_id,
+        tenant_id=payload.get("tenant_id", ""),
+        user_id=payload.get("user_id", ""),
+        source=payload.get("source", "USER_UPLOAD"),
+        # Connector documents carry the provider's id; reconciliation matches on it.
+        external_id=payload.get("external_id") or doc_id,
+        acl=list(payload.get("acl") or []),
+        mime_type=payload.get("mime_type", "text/plain"),
+        text_content=text,
+        parser_used=payload.get("parser_used", ""),
+        parse_status=payload.get("parse_status", "SUCCESS"),
+        metadata=dict(payload.get("metadata") or {}),
+    )
+
+    embedding_worker = EmbeddingWorker(model_name=payload.get("embedding_engine") or "RoleSync Vector Engine (1536-dim)")
+    batch_pipeline = BatchIngestionPipeline(embedding_worker=embedding_worker)
+    written_count = batch_pipeline.process_document(parsed_doc)
+
+    # Zero written is ambiguous. It can mean nothing was indexable, or that the
+    # delta check found every chunk already indexed - a re-sync of unchanged
+    # content. Ask the index which, so an unchanged document is not reported to
+    # the user as an error.
+    if written_count <= 0:
+        written_count = _indexed_chunk_count(parsed_doc.doc_id)
+
+    chunk_ids = [f"{parsed_doc.doc_id}_chunk_{i}" for i in range(written_count)]
+    raw_document_store.update_chunks(doc_id, total_chunks=written_count, chunk_ids=chunk_ids)
+
+    record = _find_doc_record(doc_id)
+    # A document that produced no chunks was parsed to empty text (image-only PDF,
+    # blank file). Flag it rather than leave a "healthy" Indexed row with 0 chunks.
+    if written_count <= 0:
+        if record:
+            record["status"] = "Error"
+            record["chunks"] = 0
+            record["error_message"] = guards.NO_CONTENT_MESSAGE
+            record["last_updated"] = datetime.now(timezone.utc).isoformat()
+            _save_doc_record(record)
+        print(f"[KnowledgeVault] {doc_id} produced 0 chunks; marked as Error (no extractable text).")
+        return
+
+    if record:
+        record["status"] = "Indexed"
+        record["chunks"] = written_count
+        record.pop("error_message", None)
+        record["last_updated"] = datetime.now(timezone.utc).isoformat()
+        _save_doc_record(record)
+    # The canonical DB is the lifecycle source of truth. With embedding split into
+    # its own job, nothing else moves it past EMBEDDING_QUEUED.
+    canonical_store.mark_status(parsed_doc.doc_id, "VECTOR_STORE_INDEXED")
+    print(f"[KnowledgeVault] Successfully indexed {doc_id} with {written_count} chunks.")
 
 
 # Endpoints
@@ -716,7 +797,16 @@ def process_document_job(payload: dict) -> None:
     if raw_bytes is None:
         raise RuntimeError(f"Staged bytes missing for {payload.get('doc_id')} ({staged_ref})")
 
-    _process_document_background(
+    if payload.get("skip_gatekeeper"):
+        # A released hold: the vault still says Rejected until this runs.
+        record = _find_doc_record(payload.get("doc_id", ""))
+        if record:
+            record["status"] = "Parsing"
+            record.pop("error_message", None)
+            record["last_updated"] = datetime.now(timezone.utc).isoformat()
+            _save_doc_record(record)
+
+    outcome = _process_document_background(
         doc_id=payload.get("doc_id", ""),
         tenant_id=payload.get("tenant_id", ""),
         user_id=payload.get("user_id", ""),
@@ -726,9 +816,26 @@ def process_document_job(payload: dict) -> None:
         source=payload.get("source", "USER_UPLOAD"),
         user_override_category=payload.get("user_override_category"),
         user_override_competitor=payload.get("user_override_competitor"),
+        skip_gatekeeper=bool(payload.get("skip_gatekeeper")),
     )
+
+    if outcome == OUTCOME_HELD:
+        # Keep the staged bytes: they are what a release replays. The replay
+        # payload is the original one, minus any earlier override flag, so a
+        # re-held document is evaluated afresh if it is ever resubmitted.
+        replay_payload = {k: v for k, v in payload.items() if k != "skip_gatekeeper"}
+        attached = gatekeeper_store.attach_replay(
+            payload.get("doc_id", ""),
+            {"kind": JOB_DOCUMENT_INGEST, "payload": replay_payload},
+            tenant_id=payload.get("tenant_id", ""),
+        )
+        if not attached:
+            print(f"[KnowledgeVault] No gatekeeper hold found for {payload.get('doc_id')}; replay unavailable.")
+        return
+
     # Only on success: a retry needs these bytes, and a dead-lettered job needs
-    # them to be replayable at all.
+    # them to be replayable at all. Past this point the text is persisted, so the
+    # embedding job never needs the original bytes.
     discard_staged_bytes(staged_ref)
 
 
@@ -1436,6 +1543,11 @@ def deduplicate_documents(
     }
 
 
+# Children sharing a parent collapse into one result, so search over-fetches.
+_PARENT_CANDIDATE_FACTOR = 3
+_MAX_SEARCH_CANDIDATES = 150
+
+
 class VaultSearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=1000)
     limit: int = Field(default=5, ge=1, le=50)
@@ -1466,34 +1578,60 @@ def search_knowledge_vault(
     user_acl = [f"tenant:{access.workspace_id}", f"user:{access.user_id}", access.user_id]
 
     try:
+        # Several children of one parent can match. They collapse to a single
+        # result below, so ask for more candidates than will be returned.
         matches = vector_store.search_similarity(
             query_vector=query_vector,
             tenant_id=access.workspace_id,
             user_acl=user_acl,
-            limit=req.limit,
+            limit=min(req.limit * _PARENT_CANDIDATE_FACTOR, _MAX_SEARCH_CANDIDATES),
             min_score=req.min_score,
         )
     except Exception as err:
         print(f"[KnowledgeVault] Semantic search failed: {err}")
         raise HTTPException(status_code=503, detail="Search failed. Please try again.")
 
-    return {
-        "status": "success",
-        "query": req.query,
-        "count": len(matches),
-        "results": [
+    # A child chunk is small so it matches precisely; its parent is the wider span
+    # an answer should be built from. Parents are fetched for this workspace only -
+    # the ids come from search results and must not open another workspace's text.
+    parents = parent_store.get_many(
+        [rec.metadata.get("parent_id") for rec in matches],
+        tenant_id=access.workspace_id,
+    )
+
+    results = []
+    seen_parents: set[str] = set()
+    for rec in matches:  # ordered best-first, so the first child seen per parent wins
+        parent_id = rec.metadata.get("parent_id")
+        if parent_id and parent_id in seen_parents:
+            continue
+        if parent_id:
+            seen_parents.add(parent_id)
+        parent = parents.get(parent_id) if parent_id else None
+        results.append(
             {
                 "chunk_id": rec.vector_id,
                 "doc_id": rec.doc_id,
                 "doc_ref_id": rec.doc_ref_id or rec.external_id,
                 "chunk_index": rec.chunk_index,
                 "text": rec.text,
+                "parent_id": parent_id,
+                # What to answer from. Documents indexed before parents existed
+                # have none, so they fall back to the matched chunk itself.
+                "context": parent.text if parent else rec.text,
                 "score": rec.metadata.get("similarity_score"),
                 "category": rec.metadata.get("category"),
                 "document_type": rec.metadata.get("document_type"),
             }
-            for rec in matches
-        ],
+        )
+        if len(results) >= req.limit:
+            break
+
+    return {
+        "status": "success",
+        "query": req.query,
+        "count": len(results),
+        "results": results,
     }
 
 
