@@ -16,6 +16,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import type { SourceLink, TranscriptItem } from '../../../api/salesAgentApi';
+import { Markdown } from '../../../components/common/Markdown';
 import { splitAttachmentNote } from './attachments';
 import { isAppLink, isWebLink } from './links';
 import { subagentTitle } from './subagents';
@@ -240,15 +241,15 @@ const UserBubble: React.FC<{ text: string; sending?: boolean }> = ({ text, sendi
   );
 };
 
-/** The agent's own words: plain prose next to a small avatar, not a bubble. */
+/** The agent's own words, rendered as markdown next to a small avatar, not a bubble. */
 const AssistantMessage: React.FC<{ text: string; streaming?: boolean }> = ({ text, streaming = false }) => (
   <div className="flex items-start gap-3">
     <div className="w-7 h-7 rounded-lg bg-primary/10 border border-primary/20 text-primary flex items-center justify-center shrink-0 mt-0.5">
       <Sparkles className="w-3.5 h-3.5" />
     </div>
-    <div className="min-w-0 flex-1 text-sm text-foreground whitespace-pre-wrap leading-relaxed pt-1">
-      {text}
-      {streaming && <span className="inline-block w-1.5 h-4 ml-0.5 align-text-bottom bg-primary/70 animate-pulse" />}
+    <div className="min-w-0 flex-1 pt-1">
+      <Markdown>{text}</Markdown>
+      {streaming && <span className="inline-block w-1.5 h-4 mt-1 bg-primary/70 animate-pulse" aria-hidden />}
     </div>
   </div>
 );

@@ -18,11 +18,15 @@ from app.engine.orchestrator import turn_input, valid_time_zone
 
 router = APIRouter(tags=["chat"])
 
+# The app lets the rep type up to 100,000 characters; attached files add a short note naming them.
+MAX_MESSAGE_CHARS = 100_000
+ATTACHMENT_NOTE_CHARS = 2_000
+
 
 class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    message: str = Field(min_length=1, max_length=8000)
+    message: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS + ATTACHMENT_NOTE_CHARS)
     session_id: UUID | None = Field(default=None, description="Continue this session; omit to start a new one")
     time_zone: str | None = Field(
         default=None, max_length=64, description="The rep's IANA time zone (e.g. 'Europe/Berlin'), for dates and meetings"

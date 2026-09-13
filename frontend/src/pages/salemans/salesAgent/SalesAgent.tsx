@@ -243,7 +243,7 @@ export const SalesAgent: React.FC = () => {
         /* Conversation: transcript scrolls, composer stays docked at the bottom */
         <div className="flex-1 min-h-0 flex flex-col">
           <div className="flex-1 min-h-0 overflow-y-auto">
-            <div className="max-w-3xl mx-auto w-full px-1 py-4 space-y-4">
+            <div className="max-w-4xl mx-auto w-full px-1 py-4 space-y-4">
               <Transcript
                 items={chat.items}
                 outgoing={chat.outgoing}
