@@ -147,6 +147,14 @@ class ToolFailed(Exception):
         self.retryable = retryable
 
 
+class ToolBusy(ToolFailed):
+    """The tool answered, but what it changes was busy (other writers kept colliding with this one).
+    Worth trying again, and no sign the tool is unhealthy, so it never trips the circuit breaker."""
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__(message, retryable=True)
+
+
 class ToolOutcomeUnknown(Exception):
     """Raised by a write handler that could not learn whether its side effect happened
     (e.g. the connection dropped after the request was sent). Never retried."""
