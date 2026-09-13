@@ -229,7 +229,43 @@ async def test_knowledge_search_ranks_the_workspaces_documents_and_returns_match
         (request.headers["X-User-Id"], request.headers["X-Tenant-Id"]) == (str(CTX.user_id), str(CTX.tenant_id))
         for request in seen
     )
-    assert dict(seen[0].url.params) == {"status": "Indexed"}
+    [listed] = [request for request in seen if request.url.path == _KV]
+    assert dict(listed.url.params) == {"status": "Indexed"}
+    assert output.data["method"] == "keyword"  # this data-pipeline has no semantic search (404)
+
+
+async def test_knowledge_search_uses_semantic_search_and_groups_passages_by_document():
+    seen: list[httpx.Request] = []
+    # As data-pipeline answers: doc_id is the canonical id, the vault's own id is doc_ref_id.
+    upload = f"{CTX.tenant_id}:USER_UPLOAD"
+    hits = [
+        {"doc_id": f"{upload}:doc_battle", "doc_ref_id": "doc_battle", "text": "per seat", "context": "Globex charges   per seat, which gets expensive.", "score": 0.91},
+        {"doc_id": f"{upload}:doc_parsing", "doc_ref_id": "doc_parsing", "text": "not indexed yet", "context": "still parsing", "score": 0.9},
+        {"doc_id": f"{upload}:doc_security", "doc_ref_id": "doc_security", "text": "SOC 2", "context": "We are SOC 2 Type II certified.", "score": 0.52},
+        {"doc_id": f"{upload}:doc_battle", "doc_ref_id": "doc_battle", "text": "discount", "context": "Offer 10% for annual plans.", "score": 0.48},
+    ]
+    routes = _knowledge_routes() | {"/api/v1/knowledge-vault/search": {"status": "success", "results": hits}}
+    tools = knowledge.knowledge_tools(_data_pipeline(routes, seen))
+
+    output = await _invoke(_tool(tools, "search_knowledge_base"), query="Globex pricing", max_results=3)
+
+    assert output.data["method"] == "semantic"
+    documents = output.data["documents"]
+    assert [doc["doc_id"] for doc in documents] == ["doc_battle", "doc_security"]  # a document not listed as indexed is left out
+    assert documents[0]["name"] == "Acme vs Globex battlecard" and documents[0]["score"] == 0.91
+    assert documents[0]["passages"] == ["Globex charges per seat, which gets expensive.", "Offer 10% for annual plans."]
+    [search] = [request for request in seen if request.url.path.endswith("/knowledge-vault/search")]
+    assert json.loads(search.content) == {"query": "Globex pricing", "limit": 12}
+    assert not [request for request in seen if request.url.path.endswith("/content")]  # no document texts read
+
+
+async def test_knowledge_search_falls_back_to_keywords_when_semantic_search_is_down():
+    routes = _knowledge_routes() | {"/api/v1/knowledge-vault/search": httpx.Response(503, json={"detail": "Semantic search is temporarily unavailable"})}
+    tools = knowledge.knowledge_tools(_data_pipeline(routes, []))
+
+    output = await _invoke(_tool(tools, "search_knowledge_base"), query="How do we win against Globex on pricing?")
+
+    assert output.data["method"] == "keyword" and [doc["doc_id"] for doc in output.data["documents"]] == ["doc_battle"]
 
 
 def test_passages_are_the_best_matching_windows_in_document_order():

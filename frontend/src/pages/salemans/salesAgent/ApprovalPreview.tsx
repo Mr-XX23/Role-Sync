@@ -285,6 +285,46 @@ const StockPreview: React.FC<{ preview: Preview }> = ({ preview }) => (
   </div>
 );
 
+const MOVEMENT_LABEL: Record<string, string> = {
+  RECEIVED: 'Received',
+  SOLD: 'Sold',
+  SHIPPED: 'Shipped to another location',
+  DAMAGED: 'Damaged (written off)',
+  LOST: 'Lost (written off)',
+  RETURNED: 'Returned by a customer',
+};
+
+const StockMovementPreview: React.FC<{ preview: Preview }> = ({ preview }) => {
+  const levels = list(preview.levels).map(record);
+  return (
+    <div className="space-y-2 text-sm">
+      <PreviewRow label="What" value={<span className="font-semibold">{MOVEMENT_LABEL[text(preview.type)] ?? text(preview.type)}</span>} />
+      <PreviewRow label="SKU" value={<span className="font-mono">{text(preview.sku)}</span>} />
+      <PreviewRow label="Quantity" value={text(preview.quantity)} />
+      {levels.map((level, index) => (
+        <PreviewRow
+          key={index}
+          label={levels.length > 1 ? (index === 0 ? 'From' : 'To') : 'Location'}
+          value={
+            <span>
+              {text(level.location)} · on hand <BeforeAfter before={level.before} after={level.after} />
+            </span>
+          }
+        />
+      ))}
+      {preview.resellable === false && <PreviewRow label="Resellable" value="No: counted as returned, then written off" />}
+      {text(preview.counterparty) && <PreviewRow label="With" value={text(preview.counterparty)} />}
+      {text(preview.reference) && <PreviewRow label="Reference" value={text(preview.reference)} />}
+      {text(preview.note) && <PreviewRow label="Note" value={text(preview.note)} />}
+      <p className="text-xs text-muted-foreground">
+        {preview.undoable
+          ? 'Undoing ships the stock back.'
+          : 'Stock history can’t be edited. A mistake is fixed with a count correction by a workspace owner or admin.'}
+      </p>
+    </div>
+  );
+};
+
 const ReservationPreview: React.FC<{ preview: Preview }> = ({ preview }) => (
   <div className="space-y-2 text-sm">
     <PreviewRow label="SKU" value={<span className="font-mono">{text(preview.sku)}</span>} />
@@ -446,6 +486,8 @@ export const PreviewBody: React.FC<{ card: ApprovalCardModel }> = ({ card }) => 
       return <RetirePreview preview={preview} />;
     case 'stock_change':
       return <StockPreview preview={preview} />;
+    case 'stock_movement':
+      return <StockMovementPreview preview={preview} />;
     case 'stock_reservation':
       return <ReservationPreview preview={preview} />;
     case 'stock_release':

@@ -39,7 +39,10 @@ def test_actions_get_readable_timeline_names():
     assert describe_action("create_deal", {"title": "Acme - 50 seats", "company": "Acme"}) == ("Deal: Acme - 50 seats (Acme)", "DEAL")
     assert describe_action("update_deal", {"deal_id": "x", "stage": "WON"}) == ("Update deal: stage → WON", "DEAL")
     assert describe_action("update_deal", {"deal_id": "x", "amount": 5}) == ("Update deal", "DEAL")
-    assert describe_action("set_stock", {"sku": "TS-1", "quantity": 40}) == ("Set stock of TS-1 to 40", "INVENTORY_CHANGE")
+    assert describe_action("record_stock_movement", {"sku": "TS-1", "type": "SOLD", "quantity": 4}) == ("Stock sold: 4 × TS-1", "INVENTORY_CHANGE")
+    assert describe_action("correct_stock_count", {"sku": "TS-1", "counted_quantity": 40}) == (
+        "Correct stock count of TS-1 to 40", "INVENTORY_CHANGE",
+    )
     assert describe_action("undo_actions", {"action_ids": ["a", "b"]}) == ("Undo 2 completed action(s)", "UNDO")
     assert describe_action("brand_new_tool", {}) == ("Brand new tool", "BRAND_NEW_TOOL")
     long_name, _ = describe_action("send_email", {"to": ["x@y.z"], "subject": "s" * 400})

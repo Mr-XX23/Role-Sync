@@ -51,6 +51,9 @@ const TOOL_LABEL: Record<string, string> = {
   update_catalog_item: 'Update catalog item',
   retire_catalog_item: 'Retire catalog item',
   set_stock: 'Set stock',
+  record_stock_movement: 'Record stock movement',
+  correct_stock_count: 'Correct stock count',
+  stock_history: 'Stock history',
   reserve_stock: 'Reserve stock',
   release_stock: 'Release reservation',
   undo_actions: 'Undo actions',
@@ -74,6 +77,8 @@ const WRITE_TOOLS = new Set([
   'update_catalog_item',
   'retire_catalog_item',
   'set_stock',
+  'record_stock_movement',
+  'correct_stock_count',
   'reserve_stock',
   'release_stock',
   'create_deal',
@@ -140,6 +145,15 @@ function describeCall(item: TranscriptItem): string {
     case 'set_stock':
     case 'reserve_stock':
       return [args.sku, args.quantity].filter((part) => part !== undefined).map(String).join(' · ');
+    case 'record_stock_movement':
+      return [typeof args.type === 'string' ? args.type.toLowerCase() : '', args.sku, args.quantity]
+        .filter((part) => part !== undefined && part !== '')
+        .map(String)
+        .join(' · ');
+    case 'correct_stock_count':
+      return [args.sku, args.counted_quantity === undefined ? '' : `count ${String(args.counted_quantity)}`].filter(Boolean).map(String).join(' · ');
+    case 'stock_history':
+      return args.sku ? String(args.sku) : '';
     case 'undo_actions':
       return Array.isArray(args.action_ids) ? `${args.action_ids.length} action${args.action_ids.length === 1 ? '' : 's'}` : '';
     case 'delegate': {
