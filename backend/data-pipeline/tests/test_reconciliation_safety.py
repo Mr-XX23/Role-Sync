@@ -131,6 +131,23 @@ def test_failed_listing_is_marked_incomplete():
     assert listing.items == []
 
 
+class _Reply(dict):
+    """A whole Composio response, served as-is instead of being wrapped as {"data": page}."""
+
+
+def _rejected(message="Invalid page token value.", status_code=400):
+    """What Composio returns - without raising - when the provider rejects the call.
+
+    Shape observed live for GOOGLECALENDAR_EVENTS_LIST with an invalid page token and
+    with an unknown calendar id: successful=False, and data holding only the error.
+    """
+    return _Reply(
+        successful=False,
+        error=message,
+        data={"http_error": message, "message": message, "status_code": status_code},
+    )
+
+
 class _RecordingCalendar:
     """Fake Composio client that serves scripted calendar pages and records calls."""
 
@@ -148,6 +165,8 @@ class _RecordingCalendar:
                 page = outer.pages.pop(0)
                 if isinstance(page, Exception):
                     raise page
+                if isinstance(page, _Reply):
+                    return dict(page)
                 return {"data": page}
 
         class _Composio:
@@ -315,3 +334,67 @@ def test_a_413_inside_a_request_id_is_not_mistaken_for_an_oversized_response():
 
     assert listing.complete is False
     assert len(fake.calls) == 1
+
+
+# --- calls the provider rejected --------------------------------------------
+# Composio does not raise when Google rejects a call: it answers successful=False
+# with only the error in data - no items and no next-page token, which is exactly
+# what the last page of a listing looks like.
+
+
+def test_a_rejected_first_page_is_a_failed_listing_not_an_empty_calendar():
+    fake = _RecordingCalendar([_rejected("Calendar not found for ID 'primary'.", 404)])
+
+    listing = LiveSourceLister(fake).list_source("google_calendar", "u1")
+
+    assert listing.complete is False
+    assert listing.items == []
+
+
+def test_a_rejected_later_page_does_not_pass_the_first_page_off_as_the_whole_calendar():
+    fake = _RecordingCalendar([{"items": [{"id": "e1"}], "nextPageToken": "p2"}, _rejected()])
+
+    listing = LiveSourceLister(fake).list_source("google_calendar", "u1")
+
+    assert listing.complete is False
+    assert listing.items == []
+
+
+def test_a_rejected_page_deletes_nothing_end_to_end():
+    """With fewer than 5 documents the mass-deletion guard does not apply, so the
+    listing is the only thing standing between a failed call and a tombstone."""
+    store = CanonicalStore()
+    _seed_calendar(store, ["e1", "e2", "e3"])
+    fake = _RecordingCalendar([{"items": [{"id": "e1"}], "nextPageToken": "p2"}, _rejected()])
+
+    listing = LiveSourceLister(fake).list_source("google_calendar", "u1")
+    report = _sweeper(store).sweep_source(
+        TENANT, "google_calendar", live_source_docs=listing.items, complete=listing.complete
+    )
+
+    assert report.corrections_applied == 0
+    for ext in ("e1", "e2", "e3"):
+        assert store.get_document(f"{TENANT}:google_calendar:{ext}").status != "DELETED"
+
+
+def test_an_oversized_response_reported_without_raising_still_shrinks_the_page():
+    fake = _RecordingCalendar([_rejected("Upstream_PayloadTooLarge", 413), {"items": [{"id": "e1"}]}])
+
+    listing = LiveSourceLister(fake).list_source("google_calendar", "u1")
+
+    assert listing.complete is True
+    assert [call["arguments"]["maxResults"] for call in fake.calls] == [2500, 1250]
+
+
+def test_drive_and_notion_listings_the_provider_rejects_are_incomplete():
+    class _Rejecting:
+        class _composio:
+            class tools:
+                @staticmethod
+                def execute(**_kwargs):
+                    return dict(_rejected("Request had insufficient authentication scopes.", 403))
+
+    for source in ("gdrive", "notion"):
+        listing = LiveSourceLister(_Rejecting()).list_source(source, "u1")
+        assert listing.complete is False, source
+        assert listing.items == [], source
