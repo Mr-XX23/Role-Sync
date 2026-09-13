@@ -1,4 +1,6 @@
+import type React from 'react';
 import type { LucideIcon } from 'lucide-react';
+import { GmailIcon, GoogleCalendarIcon, GoogleDriveIcon, GoogleIcon, NotionIcon, SlackIcon } from './BrandIcons';
 import {
   Activity,
   ArrowLeftRight,
@@ -10,7 +12,6 @@ import {
   Brain,
   Bug,
   Building2,
-  CalendarDays,
   CircleDollarSign,
   Clock,
   Compass,
@@ -114,8 +115,11 @@ export const ROUTE_TO_SECTION: Record<string, string> = {
 /* Feature catalog                                                     */
 /* ------------------------------------------------------------------ */
 
+/** A lucide icon or one of our inline brand marks; both take a className. */
+export type FeatureIcon = LucideIcon | React.FC<React.SVGProps<SVGSVGElement>>;
+
 export interface Feature {
-  icon: LucideIcon;
+  icon: FeatureIcon;
   title: string;
   description: string;
   /** Short label, e.g. "Undoable" or "Human-in-the-loop". */
@@ -125,7 +129,7 @@ export interface Feature {
 export interface FeatureArea {
   id: string;
   label: string;
-  icon: LucideIcon;
+  icon: FeatureIcon;
   tagline: string;
   description: string;
   features: Feature[];
@@ -148,8 +152,8 @@ export const FEATURE_AREAS: FeatureArea[] = [
       { icon: GitBranch, title: 'Specialist sub-agents', description: 'Research, outreach and quote sub-agents work in parallel and report back to the orchestrator.' },
       { icon: Brain, title: 'Memory you control', description: 'It remembers facts about you, your customers and your deals. Read or delete any of them.' },
       { icon: History, title: 'Resumable conversations', description: 'Every session is saved and picks up mid-approval, even after a restart.' },
-      { icon: Mail, title: 'Send email', description: 'Drafts and sends Gmail on your behalf, after approval.', badge: 'Undoable' },
-      { icon: CalendarDays, title: 'Book meetings', description: 'Creates Google Calendar events. Undo cancels and notifies attendees.', badge: 'Undoable' },
+      { icon: GmailIcon, title: 'Send email', description: 'Drafts and sends Gmail on your behalf, after approval.', badge: 'Undoable' },
+      { icon: GoogleCalendarIcon, title: 'Book meetings', description: 'Creates Google Calendar events. Undo cancels and notifies attendees.', badge: 'Undoable' },
       { icon: Send, title: 'Post to Slack and Notion', description: 'Sends Slack messages and creates Notion pages, both fully undoable.', badge: 'Undoable' },
       { icon: FileText, title: 'Generate documents', description: 'Produces DOCX, PPTX, XLSX, PDF or Markdown, saved to Google Drive or your Knowledge Vault.' },
       { icon: CircleDollarSign, title: 'Build priced quotes', description: 'Prices SKUs from your catalog, applies per-line discounts within limits, totals it and can reserve stock.' },
@@ -249,11 +253,11 @@ export const FEATURE_AREAS: FeatureArea[] = [
     description:
       'OAuth in a popup, configure what to pull, and let scheduled or webhook sync keep your knowledge fresh without lifting a finger.',
     features: [
-      { icon: Mail, title: 'Gmail', description: 'Sync email threads, customer correspondence and attachments into workspace knowledge.' },
-      { icon: FolderOpen, title: 'Google Drive', description: 'Index spreadsheets, contract PDFs and slide decks straight from Drive.' },
-      { icon: CalendarDays, title: 'Google Calendar', description: 'Pull client demos, sales reviews and meeting agendas into context.' },
-      { icon: MessagesSquare, title: 'Slack', description: 'Capture lead threads, sales alerts and channel discussions, including DMs.' },
-      { icon: FileText, title: 'Notion', description: 'Map internal wikis, database boards and process pages into the index.' },
+      { icon: GmailIcon, title: 'Gmail', description: 'Sync email threads, customer correspondence and attachments into workspace knowledge.' },
+      { icon: GoogleDriveIcon, title: 'Google Drive', description: 'Index spreadsheets, contract PDFs and slide decks straight from Drive.' },
+      { icon: GoogleCalendarIcon, title: 'Google Calendar', description: 'Pull client demos, sales reviews and meeting agendas into context.' },
+      { icon: SlackIcon, title: 'Slack', description: 'Capture lead threads, sales alerts and channel discussions, including DMs.' },
+      { icon: NotionIcon, title: 'Notion', description: 'Map internal wikis, database boards and process pages into the index.' },
       { icon: KeyRound, title: 'One-click OAuth connect', description: 'Authorise each app in a popup. No keys to copy.' },
       { icon: Settings, title: 'Per-connector sync configuration', description: 'Choose how many items to pull and which categories, channels or calendars to include.' },
       { icon: Clock, title: 'Scheduled auto-sync', description: 'Keep sources fresh every 2 minutes, 30 minutes, hourly, 6-hourly or daily.' },
@@ -276,7 +280,7 @@ export const FEATURE_AREAS: FeatureArea[] = [
       'Verified identities, hardened sessions and a single signed gateway in front of every service.',
     features: [
       { icon: KeyRound, title: 'Email and password sign-up', description: 'Strength-enforced passwords with a live strength meter.' },
-      { icon: Globe, title: 'Sign in with Google', description: 'One-click Google OAuth2 login as an alternative to a password.' },
+      { icon: GoogleIcon, title: 'Sign in with Google', description: 'One-click Google OAuth2 login as an alternative to a password.' },
       { icon: Mail, title: 'Email verification', description: 'Confirm your address from a verification email before your workspace unlocks.' },
       { icon: Phone, title: 'Phone and SMS OTP verification', description: 'Verify a phone number with a one-time code sent by SMS.' },
       { icon: Activity, title: 'Live verification status', description: 'The sign-up screen updates itself the moment you click the link in your inbox.' },
