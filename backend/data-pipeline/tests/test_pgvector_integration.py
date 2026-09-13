@@ -5,7 +5,7 @@ automatically - which is why several defects in it only surfaced under live
 testing. These run against an actual pgvector database when one is pointed at:
 
     RAG_PERSISTENCE=on \
-    RAG_DATABASE_URL=postgresql://<user>:<pass>@localhost:5433/rolesync-micro-rag \
+    RAG_DATABASE_URL=postgresql://<user>:<pass>@localhost:5432/rolesync-micro-rag \
     python -m pytest tests/test_pgvector_integration.py
 
 They skip cleanly otherwise.

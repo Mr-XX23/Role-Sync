@@ -25,7 +25,7 @@ hit at score 0.65 → raw download from MinIO → delete cascade. All green.
 
 | Store | Holds |
 |---|---|
-| **Postgres** (`pgvector-db`, `rag` schema) | `vector_chunks` (chunk text + embedding + **HNSW**), `document_content` (parsed text), `documents` (lineage/status/ACL), `document_events` (audit), `chunk_hashes` (delta de-dup), `checkpoints` |
+| **Postgres** (`postgres`, `rolesync-micro-rag` database, `rag` schema) | `vector_chunks` (chunk text + embedding + **HNSW**), `document_content` (parsed text), `documents` (lineage/status/ACL), `document_events` (audit), `chunk_hashes` (delta de-dup), `checkpoints` |
 | **MinIO** | raw original bytes (**manual uploads only** — connectors keep the provider as source of truth) |
 | **MongoDB** | `knowledge_documents` (vault registry), `raw_documents` (metadata + MinIO pointer), `knowledge_vault_configs`, and 15 connector-state collections |
 
@@ -65,7 +65,7 @@ Found by independent audit + live E2E; all failed *quietly*, which is why the un
 2. **Delta fingerprints were committed even when the write never reached a durable store** — making a failed index *permanent*, because the delta check then skipped those chunks forever and re-indexing could not repair them. (`arch.md`: "write hash ONLY on success".)
 3. **A transient embedding failure silently wrote pseudo-vectors into the search index.** Embeddings now carry `is_fallback`, are excluded from the index and from search, and never commit hashes — so they stay repairable.
 4. **Connector documents were unreachable by search.** Normalizers set provider-native ACLs (mailbox owner email, Slack sender id) while search filters on workspace/caller identity; Gmail content was indexed but invisible. Workspace markers are now added at ingest.
-5. **`data-pipeline` had no dependency on `pgvector-db`**, so starting first latched the process into in-memory mode for its entire lifetime, with only a `print` to show for it.
+5. **`data-pipeline` had no dependency on its Postgres server**, so starting first latched the process into in-memory mode for its entire lifetime, with only a `print` to show for it.
 6. Earlier the same day: **deleting a document left its chunk fingerprints behind**, so re-uploading the same file indexed it with 0 chunks and no error.
 
 ## P1 + P2 closed (2026-09-12, `75fb1f3`)
@@ -95,5 +95,5 @@ Found by independent audit + live E2E; all failed *quietly*, which is why the un
 ## Local infrastructure (gitignored — recreate on any other machine)
 
 - **MinIO** — `quay.io/minio/minio` (Docker Hub's `minio/minio` refuses anonymous pulls), console `:9001`, configured via `RAW_STORE_*`.
-- **pgvector-db** — `pgvector/pgvector:pg16` on host `:5433`, holding the **RAG database only**. The main `postgres` is alpine with no pgvector build and no alpine pgvector image exists; migrating it would have required a dump/restore of every production database, so it was deliberately left untouched. Consolidate at deploy time.
+- **postgres** — a single `pgvector/pgvector:pg16` server on host `:5432` holding every database, RAG included. RAG originally ran on a separate `pgvector-db` container because the main server was alpine, which has no pgvector build, and moving its data would have needed a dump/restore. Once the local volumes were reset there was nothing to migrate, so the two were consolidated. Splitting RAG back out later is a `RAG_DATABASE_URL` change, not a code change.
 - `PYTHONUNBUFFERED=1` on data-pipeline (its logs were otherwise invisible).
