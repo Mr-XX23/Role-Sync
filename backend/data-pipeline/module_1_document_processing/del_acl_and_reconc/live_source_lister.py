@@ -92,12 +92,26 @@ class LiveSourceLister:
                 user_id=user_id,
                 dangerously_skip_version_check=True,
             )
-            data = res.get("data", {}) if isinstance(res, dict) else getattr(res, "data", {})
-            return data if isinstance(data, dict) else None
         except Exception as err:
             self._last_error = str(err)
             print(f"[LiveSourceLister] {slug} failed for user_id={user_id}: {err}")
             return None
+
+        def field(name: str) -> Any:
+            return res.get(name) if isinstance(res, dict) else getattr(res, name, None)
+
+        # Composio does not raise when the provider rejects a call (revoked access, quota,
+        # an invalid page token, an unknown calendar): it answers successful=False and
+        # puts only the error in data, with no items and no next-page token. Read as a
+        # page, that looks like the END of a listing - an empty or partial listing marked
+        # complete, which a sweep would tombstone from. It is a failed call.
+        if field("successful") is False or field("error"):
+            self._last_error = str(field("error") or "tool call was not successful")
+            print(f"[LiveSourceLister] {slug} was rejected for user_id={user_id}: {self._last_error[:300]}")
+            return None
+
+        data = field("data")
+        return data if isinstance(data, dict) else None
 
     @staticmethod
     def _unwrap(data: dict[str, Any], *keys: str) -> list[dict[str, Any]]:
