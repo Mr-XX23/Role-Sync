@@ -1,14 +1,15 @@
 import React from 'react';
-import { CalendarDays, Clock, FileText, FolderOpen, Globe, KeyRound, Mail, MessagesSquare, Sparkles, Webhook } from 'lucide-react';
+import { Clock, Globe, KeyRound, Sparkles, Webhook } from 'lucide-react';
+import { GmailIcon, GoogleCalendarIcon, GoogleDriveIcon, NotionIcon, SlackIcon } from '../BrandIcons';
 import { Reveal } from '../Reveal';
 import { Container, SectionHeading } from './shared';
 
 const ORBIT_ITEMS = [
-  { icon: Mail, label: 'Gmail', angle: 0 },
-  { icon: FolderOpen, label: 'Drive', angle: 60 },
-  { icon: CalendarDays, label: 'Calendar', angle: 120 },
-  { icon: MessagesSquare, label: 'Slack', angle: 180 },
-  { icon: FileText, label: 'Notion', angle: 240 },
+  { icon: GmailIcon, label: 'Gmail', angle: 0 },
+  { icon: GoogleDriveIcon, label: 'Drive', angle: 60 },
+  { icon: GoogleCalendarIcon, label: 'Calendar', angle: 120 },
+  { icon: SlackIcon, label: 'Slack', angle: 180 },
+  { icon: NotionIcon, label: 'Notion', angle: 240 },
   { icon: Globe, label: 'Web', angle: 300 },
 ];
 
@@ -50,7 +51,7 @@ const Orbit: React.FC = () => (
             >
               <div className="flex flex-col items-center gap-1" style={{ transform: `rotate(${-it.angle}deg)` }}>
                 <div className="w-11 h-11 rounded-xl bg-card border border-border/80 shadow-md flex items-center justify-center text-foreground">
-                  <Icon className="w-5 h-5 text-primary" />
+                  <Icon className="w-5 h-5 text-foreground" />
                 </div>
                 <span className="font-mono text-[9px] font-bold uppercase tracking-wider text-muted-foreground">{it.label}</span>
               </div>

@@ -3,13 +3,11 @@ import { Link } from 'react-router-dom';
 import {
   ArrowRight,
   Bot,
-  CalendarDays,
   Check,
   ChevronDown,
   FileText,
   Handshake,
   Library,
-  Mail,
   Package,
   Pencil,
   Play,
@@ -20,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Reveal } from '../Reveal';
 import { prefersReducedMotion, useSpotlight } from '../useReveal';
+import { GmailIcon, GoogleCalendarIcon } from '../BrandIcons';
 import { BRAND, TOTAL_FEATURES } from '../marketingData';
 import { Container, Eyebrow } from './shared';
 
@@ -28,9 +27,9 @@ import { Container, Eyebrow } from './shared';
 /* ------------------------------------------------------------------ */
 
 const TOOL_CALLS = [
-  { icon: Mail, label: 'search_gmail_threads · "Acme"' },
+  { icon: GmailIcon, label: 'search_gmail_threads · "Acme"' },
   { icon: Library, label: 'search_knowledge_vault · Q4 rollout battlecard' },
-  { icon: CalendarDays, label: 'find_free_slots · Thu · 30 min' },
+  { icon: GoogleCalendarIcon, label: 'find_free_slots · Thu · 30 min' },
   { icon: Package, label: 'check_availability · SKU-4471 × 120' },
 ];
 
@@ -119,7 +118,7 @@ const AgentDemo: React.FC = () => {
                   key={t.label}
                   className="mk-pop flex items-center gap-2 min-w-0 rounded-lg border border-border/70 bg-background/70 px-2.5 py-1.5"
                 >
-                  <Icon className="w-3.5 h-3.5 text-primary shrink-0" />
+                  <Icon className="w-3.5 h-3.5 text-foreground shrink-0" />
                   <span className="font-mono text-[10px] text-foreground/80 truncate min-w-0">{t.label}</span>
                   <span className="ml-auto shrink-0">
                     {complete ? (
@@ -146,7 +145,7 @@ const AgentDemo: React.FC = () => {
                 <p className="font-mono text-[9px] font-bold uppercase tracking-widest text-muted-foreground">
                   {approved ? 'approved · undo available' : 'needs your approval'}
                 </p>
-                <Mail className="w-3.5 h-3.5 text-primary" />
+                <GmailIcon className="w-3.5 h-3.5" />
               </div>
               <p className="mt-1.5 text-xs font-semibold text-foreground">send_email → jane@acme.com</p>
               <p className="text-[11px] text-muted-foreground leading-relaxed mt-1">
