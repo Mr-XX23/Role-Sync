@@ -113,6 +113,34 @@ def test_a_public_page_that_cannot_be_fetched_is_still_a_502(client, monkeypatch
     assert failed.status_code == 502 and failed.json()["detail"] == ingestion_guards.URL_FETCH_FAILED_MESSAGE
 
 
+def test_processing_a_document_again_forgets_its_chunk_fingerprints(client, monkeypatch):
+    """Re-indexing and re-crawling a page used to remove only the vectors. The fingerprints left behind made
+    the delta check skip unchanged content as already indexed, so the document ended in Error with 0 chunks."""
+    from module_1_document_processing.pipeline import safe_fetch
+
+    cleared: list[str] = []
+
+    class FingerprintStore:
+        def clear_document_hashes(self, doc_id):
+            cleared.append(doc_id)
+
+    monkeypatch.setattr(knowledge_vault_routes, "VersionedHashDB", FingerprintStore)
+    monkeypatch.setattr(safe_fetch, "fetch_public_url", lambda *a, **k: b"<html><body><p>Globex charges per seat.</p></body></html>")
+
+    doc_id = _upload(client, MEMBER).json()["document"]["doc_id"]
+    assert cleared == []  # a new document has nothing to forget
+    assert client.post(f"/api/v1/knowledge-vault/documents/{doc_id}/reindex", headers=_as(MEMBER)).status_code == 200
+    assert set(cleared) == {f"{WORKSPACE}:USER_UPLOAD:{doc_id}", doc_id}
+
+    cleared.clear()
+    page = {"url": "https://globex.example/pricing"}
+    page_id = client.post("/api/v1/knowledge-vault/ingest-url", headers=_as(MEMBER), json=page).json()["document"]["doc_id"]
+    assert cleared == []
+    refreshed = client.post("/api/v1/knowledge-vault/ingest-url", headers=_as(MEMBER), json=page).json()["document"]
+    assert refreshed["doc_id"] == page_id
+    assert set(cleared) == {f"{WORKSPACE}:URL_INGEST:{page_id}", page_id}
+
+
 def test_only_the_uploader_or_an_admin_deletes_and_viewers_only_read(client):
     doc_id = _upload(client, MEMBER).json()["document"]["doc_id"]
     assert _upload(client, VIEWER).status_code == 403
