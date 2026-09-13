@@ -108,6 +108,21 @@ export const TransferStockModal: React.FC<TransferStockModalProps> = ({
     }
   };
 
+  const formatType = (t: string) => {
+    switch (t?.toUpperCase()) {
+      case 'IN_TRANSIT':
+        return 'In Transit';
+      case 'STORE':
+        return 'Store';
+      case 'SUPPLIER':
+        return 'Supplier';
+      case 'WAREHOUSE':
+        return 'Warehouse';
+      default:
+        return t || 'Facility';
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs animate-in fade-in duration-200">
       <div className="relative w-full max-w-lg bg-card border border-border/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
@@ -174,7 +189,7 @@ export const TransferStockModal: React.FC<TransferStockModalProps> = ({
               >
                 {locations.map((loc) => (
                   <option key={loc.id} value={loc.id}>
-                    {loc.name} ({loc.type})
+                    {loc.name} ({formatType(loc.type)})
                   </option>
                 ))}
               </select>
@@ -192,7 +207,7 @@ export const TransferStockModal: React.FC<TransferStockModalProps> = ({
               >
                 {locations.map((loc) => (
                   <option key={loc.id} value={loc.id}>
-                    {loc.name} ({loc.type})
+                    {loc.name} ({formatType(loc.type)})
                   </option>
                 ))}
               </select>

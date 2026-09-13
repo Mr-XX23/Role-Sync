@@ -423,6 +423,21 @@ export const InventoryMatrixTab: React.FC<InventoryMatrixTabProps> = ({
     }
   };
 
+  const formatLocationType = (type: string) => {
+    switch (type?.toUpperCase()) {
+      case 'IN_TRANSIT':
+        return 'In Transit';
+      case 'STORE':
+        return 'Store';
+      case 'SUPPLIER':
+        return 'Supplier';
+      case 'WAREHOUSE':
+        return 'Warehouse';
+      default:
+        return type ? type.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'Facility';
+    }
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
       {/* Fulfillment Hubs Cards Section */}
@@ -501,7 +516,15 @@ export const InventoryMatrixTab: React.FC<InventoryMatrixTabProps> = ({
                         <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground font-medium">
                           P{loc.priority}
                         </span>
-                        {!loc.sellable ? (
+                        {loc.type === 'IN_TRANSIT' ? (
+                          <span
+                            className="text-[10px] px-1.5 py-0.5 rounded-md bg-purple-500/10 text-purple-400 border border-purple-500/20 font-medium flex items-center gap-1"
+                            title="In-transit stock buffer (logistics)"
+                          >
+                            <Truck className="w-2.5 h-2.5" />
+                            In Transit
+                          </span>
+                        ) : !loc.sellable ? (
                           <span
                             className="text-[10px] px-1.5 py-0.5 rounded-md bg-amber-500/10 text-amber-500 border border-amber-500/20 font-medium flex items-center gap-0.5"
                             title="Non-sellable facility (Quarantine/Internal)"
@@ -517,7 +540,7 @@ export const InventoryMatrixTab: React.FC<InventoryMatrixTabProps> = ({
                       </div>
                     </div>
                     <div className="text-xs text-muted-foreground flex items-center gap-1.5">
-                      <span className="capitalize">{loc.type?.toLowerCase() || 'Facility'}</span>
+                      <span>{loc.type === 'IN_TRANSIT' ? 'Transit Buffer' : formatLocationType(loc.type)}</span>
                       {isSelected && (
                         <>
                           <span>•</span>
@@ -534,7 +557,7 @@ export const InventoryMatrixTab: React.FC<InventoryMatrixTabProps> = ({
                         {loc.sellable ? item.available : item.onHand}
                       </span>
                       <span className="text-xs text-muted-foreground font-medium">
-                        {loc.sellable ? 'sellable units' : 'internal units'}
+                        {loc.sellable ? 'sellable units' : loc.type === 'IN_TRANSIT' ? 'transit units' : 'internal units'}
                       </span>
                     </div>
 
@@ -551,7 +574,7 @@ export const InventoryMatrixTab: React.FC<InventoryMatrixTabProps> = ({
                     {isOos ? (
                       <span className="text-muted-foreground flex items-center gap-1.5 font-medium">
                         <span className="w-2 h-2 rounded-full bg-muted-foreground/60"></span>
-                        Depleted Depot
+                        {loc.type === 'IN_TRANSIT' ? 'Empty Transit Hub' : 'Depleted Depot'}
                       </span>
                     ) : item.outOfStockCount > 0 ? (
                       <span className="text-destructive flex items-center gap-1.5 font-medium">
@@ -978,7 +1001,7 @@ export const InventoryMatrixTab: React.FC<InventoryMatrixTabProps> = ({
                   <th className="px-4 py-3.5 min-w-60">
                     Variant SKU & Product
                   </th>
-                  <th className="px-3 py-3.5 min-w-28 text-right">Price (USD)</th>
+                  <th className="px-3 py-3.5 min-w-28 text-right">Price</th>
                   <th className="px-3 py-3.5 min-w-32 text-center font-bold text-primary">
                     {selectedLocation ? `${selectedLocation.name} Avail` : 'Total Available'}
                   </th>
@@ -989,8 +1012,12 @@ export const InventoryMatrixTab: React.FC<InventoryMatrixTabProps> = ({
                         <span>{loc.name}</span>
                       </div>
                       <div className="text-[11px] font-medium text-muted-foreground normal-case mt-0.5">
-                        <span className="capitalize">{loc.type?.toLowerCase()}</span> • P{loc.priority}
-                        {loc.sellable ? ' (Sellable)' : ' (Internal)'}
+                        <span>{formatLocationType(loc.type)}</span> • P{loc.priority}
+                        {loc.sellable
+                          ? ' (Sellable)'
+                          : loc.type === 'IN_TRANSIT'
+                          ? ' (In Transit)'
+                          : ' (Internal)'}
                       </div>
                     </th>
                   ))}
@@ -1102,6 +1129,10 @@ export const InventoryMatrixTab: React.FC<InventoryMatrixTabProps> = ({
                                     }`}
                                   >
                                     {locData.available} avail
+                                  </span>
+                                ) : loc.type === 'IN_TRANSIT' ? (
+                                  <span className="text-xs font-semibold px-2 py-0.5 rounded-md text-purple-400 bg-purple-500/10 border border-purple-500/20">
+                                    {locData.onHand} in transit
                                   </span>
                                 ) : (
                                   <span className="text-xs font-semibold px-2 py-0.5 rounded-md text-slate-400 bg-muted/60">

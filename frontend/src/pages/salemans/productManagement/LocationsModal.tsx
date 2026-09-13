@@ -641,6 +641,10 @@ export const LocationsModal: React.FC<LocationsModalProps> = ({
                             <span className="px-2.5 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
                               <span>✅</span> Available to Sell
                             </span>
+                          ) : loc.type === 'IN_TRANSIT' ? (
+                            <span className="px-2.5 py-0.5 rounded-md text-[11px] font-semibold bg-purple-500/15 text-purple-400 border border-purple-500/30 flex items-center gap-1">
+                              <Truck className="w-3 h-3" /> In-Transit Buffer
+                            </span>
                           ) : (
                             <span className="px-2.5 py-0.5 rounded-md text-[11px] font-semibold bg-zinc-500/15 text-zinc-400 border border-zinc-500/30 flex items-center gap-1">
                               <span>🔒</span> Internal Storage Only

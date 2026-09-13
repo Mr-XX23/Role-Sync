@@ -175,7 +175,7 @@ export const AdjustStockModal: React.FC<AdjustStockModalProps> = ({
   const locationOptions: DropdownOption[] = locations.map((loc) => ({
     value: loc.id,
     label: loc.name,
-    sub: loc.type,
+    sub: loc.type === 'IN_TRANSIT' ? 'In Transit' : loc.type ? loc.type.replace(/_/g, ' ') : undefined,
   }));
 
   const handleSubmit = async (e: React.FormEvent) => {

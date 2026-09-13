@@ -387,9 +387,6 @@ export const KnowledgeVault: React.FC = () => {
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <h2 className="font-serif text-3xl font-bold text-primary">Knowledge Vault</h2>
-            <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold border border-emerald-500/20">
-              LIVE MESH
-            </span>
           </div>
           <p className="text-sm text-muted-foreground max-w-xl leading-relaxed">
             Your central repository for sales materials. Upload battlecards, pricing sheets, and product specs to power your AI assistant with accurate deal intelligence.
