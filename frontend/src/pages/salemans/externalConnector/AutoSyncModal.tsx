@@ -17,51 +17,51 @@ export const AUTO_SYNC_SCHEDULES: AutoSyncOption[] = [
   {
     id: 'off',
     title: 'Off (Manual Only)',
-    subtitle: 'Disable automated polling. Data will only sync when you manually click "Sync Now".',
+    subtitle: 'Sync only when you manually click "Sync Now". Automatic background sync is paused.',
     intervalMinutes: 0,
-    badge: 'Disabled · Default',
-    nextRunDesc: 'No automated sync scheduled',
+    badge: 'Manual',
+    nextRunDesc: 'No automatic sync scheduled',
   },
   {
     id: '2m',
     title: 'Every 2 Minutes',
-    subtitle: 'Rapid polling for active development, real-time testing, and continuous ingestion.',
+    subtitle: 'Fast sync for testing and rapid real-time updates.',
     intervalMinutes: 2,
-    badge: 'High Frequency',
+    badge: 'Fast',
     nextRunDesc: 'Next sync in ~2 minutes',
   },
   {
     id: '30m',
     title: 'Every 30 Minutes',
-    subtitle: 'Standard balanced synchronization interval for regular incoming updates.',
+    subtitle: 'Keeps your records fresh throughout the day with optimal performance.',
     intervalMinutes: 30,
-    badge: 'Balanced',
+    badge: 'Recommended',
     nextRunDesc: 'Next sync in ~30 minutes',
     recommended: true,
   },
   {
     id: '1h',
     title: 'Every 1 Hour',
-    subtitle: 'Hourly scrape capturing steady updates without high API rate pressure.',
+    subtitle: 'Regular hourly sync capturing steady updates throughout the day.',
     intervalMinutes: 60,
-    badge: 'Hourly Scrape',
-    nextRunDesc: 'Next sync at top of next hour',
+    badge: 'Hourly',
+    nextRunDesc: 'Next sync in ~1 hour',
   },
   {
     id: '6h',
     title: 'Every 6 Hours',
-    subtitle: 'Periodic quad-daily sweep across business hours for regular batch processing.',
+    subtitle: 'Periodic sync 4 times a day across standard business hours.',
     intervalMinutes: 360,
-    badge: 'Quad-Daily',
+    badge: '4x Daily',
     nextRunDesc: 'Next sync in ~6 hours',
   },
   {
     id: '24h',
-    title: 'Every 24 Hours (02:00 AM)',
-    subtitle: 'Daily overnight cron sequence executed every morning at 02:00 AM.',
+    title: 'Every 24 Hours',
+    subtitle: 'Runs once overnight every day at 2:00 AM outside active work hours.',
     intervalMinutes: 1440,
-    badge: 'Daily Cron · 02:00 AM',
-    nextRunDesc: 'Next sync tonight at 02:00 AM',
+    badge: 'Daily',
+    nextRunDesc: 'Next sync tonight at 2:00 AM',
   },
 ];
 
@@ -203,22 +203,19 @@ export const AutoSyncModal: React.FC<AutoSyncModalProps> = ({
         {/* Header */}
         <div className="p-6 border-b border-border/80 flex justify-between items-start bg-muted/20">
           <div className="flex items-center gap-3.5">
-            <div className="w-12 h-12 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center shadow-3xs p-2.5">
+            <div className="w-11 h-11 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center p-2.5 shadow-3xs shrink-0">
               {logoUrl ? (
                 <img src={logoUrl} alt={connectorName} className="w-full h-full object-contain" />
               ) : (
-                <Clock className="w-6 h-6 text-primary" />
+                <Clock className="w-5 h-5 text-emerald-500" />
               )}
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-serif text-xl font-bold text-foreground">Sync & Trigger Settings</h3>
-                <span className="text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-primary/10 text-primary border border-primary/20">
-                  Cadence
-                </span>
-              </div>
+              <h3 className="text-lg font-semibold text-foreground tracking-tight">
+                Sync & Trigger Settings
+              </h3>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Configure background polling schedule and real-time webhook push ingestion for {connectorName}.
+                Configure automated sync schedule and real-time updates for {connectorName}.
               </p>
             </div>
           </div>
@@ -239,7 +236,7 @@ export const AutoSyncModal: React.FC<AutoSyncModalProps> = ({
         )}
 
         {/* Form Body */}
-        <form onSubmit={handleApply} className="p-6 space-y-6 overflow-y-auto flex-1">
+        <form onSubmit={handleApply} className="p-6 space-y-5 overflow-y-auto flex-1">
           {errorMsg && (
             <div className="p-3.5 bg-destructive/10 border border-destructive/20 rounded-xl text-xs text-destructive flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -250,19 +247,21 @@ export const AutoSyncModal: React.FC<AutoSyncModalProps> = ({
           {/* OPTION 1: SCHEDULED AUTO-SYNC */}
           <div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-4">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className={`p-2 rounded-lg ${autoSyncEnabled ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground'}`}>
+              <div className="flex items-center gap-3">
+                <div className={`p-2.5 rounded-xl ${autoSyncEnabled ? 'bg-emerald-500/15 text-emerald-500' : 'bg-muted text-muted-foreground'}`}>
                   <Power className="w-4 h-4" />
                 </div>
                 <div>
-                  <h4 className="text-xs font-bold text-foreground flex items-center gap-2">
-                    Automated Background Sync
-                    <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${autoSyncEnabled ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-bold' : 'bg-muted text-muted-foreground'}`}>
-                      {autoSyncEnabled ? 'ON' : 'OFF (Default)'}
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-sm font-semibold text-foreground">
+                      Automated Background Sync
+                    </h4>
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${autoSyncEnabled ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-muted text-muted-foreground'}`}>
+                      {autoSyncEnabled ? 'Active' : 'Paused'}
                     </span>
-                  </h4>
-                  <p className="text-[11px] text-muted-foreground">
-                    Periodically poll external accounts for new data according to an automated schedule.
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Automatically sync new records and updates on a recurring schedule.
                   </p>
                 </div>
               </div>
@@ -273,13 +272,13 @@ export const AutoSyncModal: React.FC<AutoSyncModalProps> = ({
                 onClick={handleToggleAutoSync}
                 disabled={isSubmitting}
                 className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  autoSyncEnabled ? 'bg-primary' : 'bg-muted-foreground/30'
+                  autoSyncEnabled ? 'bg-emerald-500' : 'bg-muted-foreground/30'
                 }`}
                 role="switch"
                 aria-checked={autoSyncEnabled}
               >
                 <span
-                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-background shadow-lg ring-0 transition duration-200 ease-in-out ${
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
                     autoSyncEnabled ? 'translate-x-5' : 'translate-x-0'
                   }`}
                 />
@@ -287,16 +286,16 @@ export const AutoSyncModal: React.FC<AutoSyncModalProps> = ({
             </div>
 
             {/* Schedule Option Cards */}
-            <div className="space-y-2 pt-1 border-t border-border/60">
-              <label className="text-[11px] font-bold text-foreground flex items-center justify-between pt-1">
-                <span className="flex items-center gap-1.5">
-                  <Timer className="w-3.5 h-3.5 text-primary" />
-                  Select Schedule Frequency
+            <div className="space-y-2 pt-2 border-t border-border/60">
+              <div className="flex items-center justify-between py-1">
+                <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                  <Timer className="w-3.5 h-3.5 text-emerald-500" />
+                  Sync Frequency
                 </span>
-                <span className="text-[10px] font-mono text-muted-foreground">
-                  Current: <strong className="text-foreground uppercase">{currentFrequency}</strong>
+                <span className="text-[11px] text-muted-foreground">
+                  Current: <strong className="text-foreground">{currentOption.title}</strong>
                 </span>
-              </label>
+              </div>
 
               <div className="space-y-2">
                 {AUTO_SYNC_SCHEDULES.map((opt) => {
@@ -308,46 +307,40 @@ export const AutoSyncModal: React.FC<AutoSyncModalProps> = ({
                       type="button"
                       disabled={isSubmitting}
                       onClick={() => handleSelectSchedule(opt.id)}
-                      className={`w-full p-3 rounded-xl border text-left transition-all flex items-start justify-between cursor-pointer group ${
+                      className={`w-full p-3.5 rounded-xl border text-left transition-all flex items-center justify-between cursor-pointer group ${
                         isSelected
                           ? isOff
-                            ? 'bg-amber-500/10 border-amber-500/40 text-foreground ring-1 ring-amber-500/30'
-                            : 'bg-primary/10 border-primary text-foreground shadow-3xs ring-1 ring-primary/40'
-                          : 'bg-card border-border hover:border-primary/40 hover:bg-muted/40 text-muted-foreground'
+                            ? 'bg-muted/50 border-border ring-1 ring-border text-foreground shadow-3xs'
+                            : 'bg-emerald-500/10 border-emerald-500/60 ring-1 ring-emerald-500/30 text-foreground shadow-3xs'
+                          : 'bg-card border-border/70 hover:border-emerald-500/40 hover:bg-muted/30 text-muted-foreground'
                       }`}
                     >
                       <div className="space-y-0.5 pr-3">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xs font-bold text-foreground group-hover:text-primary transition-colors">
+                          <span className={`text-xs font-semibold ${isSelected ? 'text-foreground font-bold' : 'text-foreground/90 group-hover:text-foreground'}`}>
                             {opt.title}
                           </span>
-                          <span
-                            className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full uppercase ${
-                              isSelected
-                                ? isOff
-                                  ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30'
-                                  : 'bg-primary text-primary-foreground'
-                                : 'bg-muted text-muted-foreground border border-border/80'
-                            }`}
-                          >
-                            {opt.badge}
-                          </span>
                           {opt.recommended && (
-                            <span className="text-[9px] font-bold text-amber-500 dark:text-amber-400 flex items-center gap-0.5">
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 flex items-center gap-1">
                               <Sparkles className="w-2.5 h-2.5" /> Recommended
                             </span>
                           )}
+                          {opt.badge && !opt.recommended && (
+                            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border/60">
+                              {opt.badge}
+                            </span>
+                          )}
                         </div>
-                        <p className="text-[11px] text-muted-foreground leading-snug">{opt.subtitle}</p>
+                        <p className="text-xs text-muted-foreground leading-relaxed">{opt.subtitle}</p>
                       </div>
 
                       <div
-                        className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 mt-0.5 transition-all ${
+                        className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 transition-all ${
                           isSelected
                             ? isOff
-                              ? 'bg-amber-500 border-amber-500 text-white'
-                              : 'bg-primary border-primary text-primary-foreground'
-                            : 'border-border bg-background group-hover:border-primary/50'
+                              ? 'bg-foreground border-foreground text-background'
+                              : 'bg-emerald-500 border-emerald-500 text-white'
+                            : 'border-border/80 bg-background group-hover:border-emerald-500/50'
                         }`}
                       >
                         {isSelected && <CheckCircle2 className="w-3.5 h-3.5" />}
@@ -359,22 +352,24 @@ export const AutoSyncModal: React.FC<AutoSyncModalProps> = ({
             </div>
           </div>
 
-          {/* OPTION 2: REAL-TIME WEBHOOK TRIGGERS */}
+          {/* OPTION 2: REAL-TIME WEBHOOK UPDATES */}
           <div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-3">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className={`p-2 rounded-lg ${webhookEnabled ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400' : 'bg-muted text-muted-foreground'}`}>
+              <div className="flex items-center gap-3">
+                <div className={`p-2.5 rounded-xl ${webhookEnabled ? 'bg-emerald-500/15 text-emerald-500' : 'bg-muted text-muted-foreground'}`}>
                   <Zap className="w-4 h-4" />
                 </div>
                 <div>
-                  <h4 className="text-xs font-bold text-foreground flex items-center gap-2">
-                    Real-Time Webhooks Trigger
-                    <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${webhookEnabled ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-bold' : 'bg-muted text-muted-foreground'}`}>
-                      {webhookEnabled ? 'ON' : 'OFF (Default)'}
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-sm font-semibold text-foreground">
+                      Real-Time Webhook Updates
+                    </h4>
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${webhookEnabled ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-muted text-muted-foreground'}`}>
+                      {webhookEnabled ? 'Active' : 'Off'}
                     </span>
-                  </h4>
-                  <p className="text-[11px] text-muted-foreground">
-                    Instant push ingestion triggered whenever a new item is created or updated externally.
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Instantly sync new items as soon as they are created or modified in {connectorName}.
                   </p>
                 </div>
               </div>
@@ -385,42 +380,37 @@ export const AutoSyncModal: React.FC<AutoSyncModalProps> = ({
                 onClick={() => setWebhookEnabled(!webhookEnabled)}
                 disabled={isSubmitting}
                 className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  webhookEnabled ? 'bg-amber-500' : 'bg-muted-foreground/30'
+                  webhookEnabled ? 'bg-emerald-500' : 'bg-muted-foreground/30'
                 }`}
                 role="switch"
                 aria-checked={webhookEnabled}
               >
                 <span
-                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-background shadow-lg ring-0 transition duration-200 ease-in-out ${
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
                     webhookEnabled ? 'translate-x-5' : 'translate-x-0'
                   }`}
                 />
               </button>
             </div>
-
-            <div className="p-2.5 rounded-lg bg-background/80 border border-border/60 text-[11px] text-muted-foreground flex items-center justify-between">
-              <span>
-                {webhookEnabled
-                  ? 'Active: External webhooks will trigger immediate document ingestion.'
-                  : 'Disabled: Real-time webhook events are ignored to save resources.'}
-              </span>
-              <span className="font-mono text-[10px] uppercase font-bold text-foreground">
-                {webhookEnabled ? 'WEBHOOK ACTIVE' : 'WEBHOOK OFF'}
-              </span>
-            </div>
           </div>
 
-          {/* Schedule Preview & Detail Box */}
+          {/* Schedule Summary Box */}
           <div className="p-3.5 rounded-xl bg-muted/30 border border-border/80 flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2">
-              <Clock className="w-4 h-4 text-primary shrink-0" />
+            <div className="flex items-center gap-2.5">
+              <Clock className="w-4 h-4 text-emerald-500 shrink-0" />
               <div>
-                <p className="font-semibold text-foreground">Estimated Cadence</p>
+                <p className="font-medium text-foreground">
+                  {autoSyncEnabled ? (
+                    <>Syncing <strong className="text-emerald-500 font-semibold">{currentOption.title}</strong></>
+                  ) : (
+                    <>Automated sync is <strong className="text-muted-foreground">paused</strong></>
+                  )}
+                </p>
                 <p className="text-[11px] text-muted-foreground">{currentOption.nextRunDesc}</p>
               </div>
             </div>
-            <span className="font-mono text-xs font-bold px-2.5 py-1 bg-background border border-border rounded-lg text-primary">
-              {currentOption.id.toUpperCase()}
+            <span className="text-xs font-semibold px-2.5 py-1 bg-background border border-border/80 rounded-lg text-foreground">
+              {autoSyncEnabled ? currentOption.title : 'Manual Only'}
             </span>
           </div>
 
