@@ -275,14 +275,20 @@ class InventoryLevel(Base):
     )
 
 
+# Why a ledger row exists. RESERVE and RELEASE record holds on stock (qty_reserved) and
+# leave qty_on_hand alone; every other reason is a change to qty_on_hand.
+STOCK_MOVEMENT_REASONS = (
+    "RESTOCK", "SALE", "RESERVE", "RELEASE", "TRANSFER_IN", "TRANSFER_OUT", "ADJUST", "DAMAGE", "LOST", "RETURN",
+)
+STOCK_MOVEMENT_REASON_CHECK = "reason IN (" + ", ".join(f"'{r}'" for r in STOCK_MOVEMENT_REASONS) + ")"
+
+
 class StockMovement(Base):
     __tablename__ = "stock_movement"
     __table_args__ = (
-        CheckConstraint(
-            "reason IN ('RESTOCK', 'SALE', 'RESERVE', 'RELEASE', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUST', 'DAMAGE')",
-            name="ck_stock_movement_reason",
-        ),
+        CheckConstraint(STOCK_MOVEMENT_REASON_CHECK, name="ck_stock_movement_reason"),
         Index("idx_stock_mov_tenant_inv_at", "tenant_id", "inv_level_id", "at"),
+        Index("idx_stock_mov_tenant_at", "tenant_id", "at"),
         {"schema": "catalog"},
     )
 
@@ -296,8 +302,11 @@ class StockMovement(Base):
     tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     delta = Column(Integer, nullable=False)
     reason = Column(String(50), nullable=False)
-    ref_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    ref_id = Column(UUID(as_uuid=True), nullable=True, index=True)  # groups the rows one action wrote
     note = Column(Text, nullable=True)
+    reference = Column(String(255), nullable=True)  # the user's own reference: PO, order or invoice number
+    counterparty = Column(String(255), nullable=True)  # who the stock came from or went to
+    on_hand_after = Column(Integer, nullable=True)  # qty_on_hand once this row applied; unknown for older rows
     at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     created_by = Column(String(255), nullable=True)
 

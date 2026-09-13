@@ -1,5 +1,6 @@
 """Changing the catalog needs a workspace role that can write: viewers read the catalog but
-can't change it (403, as in the knowledge vault); owners, admins and members can.
+can't change it (403, as in the knowledge vault); owners, admins and members can. Replacing
+an existing stock count is for owners and admins only.
 
 Runs the real routes with workspace-service faked. The catalog service and the CSV import
 worker are replaced by a stub whose every method raises ``Reached(<method name>)``, which the
@@ -15,6 +16,7 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from catalog import routes
+from catalog.stock_movements import StockConflictError, StockPermissionError
 from module_1_document_processing import workspace_access
 from module_1_document_processing.workspace_access import MembershipDirectory
 
@@ -51,6 +53,7 @@ CHANGES = [
     ("POST", "/inventory/reserve", {"sku": "HP-01", "qty": 1}, "reserve"),
     ("POST", "/inventory/release/{reservation_id}", None, "release"),
     ("POST", "/inventory/transfer", {"sku": "HP-01", "from_location_id": LOCATION, "to_location_id": OTHER_LOCATION, "qty": 1}, "transfer"),
+    ("POST", "/inventory/movements", {"type": "SOLD", "variant_id": VARIANT, "location_id": LOCATION, "qty": 1}, "record_movement"),
     ("POST", "/import/commit", CSV, "create_job"),
 ]
 READS = [
@@ -64,6 +67,8 @@ READS = [
     ("GET", "/variants/{sku}/check-availability", None, "check_availability"),
     ("GET", "/locations", None, "list_locations"),
     ("GET", "/inventory/availability", None, "batch_availability"),
+    ("GET", "/inventory/movements", None, "list_movements"),
+    ("GET", "/inventory/movements/summary", None, "movement_summary"),
     ("GET", "/import/jobs/{job_id}", None, "get_job"),
     # POSTs that don't change data
     ("POST", "/ai/semantic-search", {"query": "headphones for mixing"}, "semantic_search"),
@@ -95,17 +100,31 @@ class _Stub:
         return call
 
 
-@pytest.fixture
-def client(monkeypatch):
+class _CountAwareStub:
+    """Like ``_Stub``, and also says whether the caller may replace a stock count."""
+
+    def __getattr__(self, name):
+        def call(*args, **kwargs):
+            raise Reached(f"{name} can_correct={kwargs.get('can_correct')}")
+
+        return call
+
+
+def _app(monkeypatch, stub):
     monkeypatch.setattr(
         workspace_access, "directory", MembershipDirectory("http://workspace.test", fetch=lambda base, user, t: ROLES.get(user, {}))
     )
-    monkeypatch.setattr(routes, "catalog_import_worker", _Stub())
+    monkeypatch.setattr(routes, "catalog_import_worker", stub())
     app = FastAPI()
     app.include_router(routes.router, prefix="/api/v1/catalog")
-    app.dependency_overrides[routes.get_service] = _Stub
+    app.dependency_overrides[routes.get_service] = stub
     app.add_exception_handler(Reached, lambda request, exc: JSONResponse({"reached": str(exc)}))
     return TestClient(app)
+
+
+@pytest.fixture
+def client(monkeypatch):
+    return _app(monkeypatch, _Stub)
 
 
 def _send(client, user, method, path, body, workspace=WORKSPACE):
@@ -140,6 +159,59 @@ def test_the_role_that_counts_is_the_one_in_the_workspace_acted_in(client):
     # Owning some other workspace doesn't make you a member of this one.
     refused = _send(client, OUTSIDER, method, path, body)
     assert (refused.status_code, refused.json()["detail"]) == (403, "You are not a member of this workspace")
+
+
+# Routes through which an existing stock count could be replaced. Whether a change replaces a
+# count depends on the stock (the service decides); the route passes on whether the caller may.
+COUNT_SETTERS = [
+    (
+        "POST",
+        "/inventory/movements",
+        {"type": "COUNT_CORRECTION", "variant_id": VARIANT, "location_id": LOCATION, "qty": 3, "note": "Recount"},
+        "record_movement",
+    ),
+    ("POST", "/inventory/set-stock", STOCK, "set_stock"),
+    ("POST", "/inventory/batch-set-stock", {"items": [STOCK]}, "batch_set_stock"),
+    ("POST", "/inventory/adjust-stock", {"variant_id": VARIANT, "location_id": LOCATION, "delta": -1}, "adjust_stock"),
+    ("POST", "/import/commit", CSV, "create_job"),
+]
+
+
+def test_only_owners_and_admins_may_replace_a_stock_count(monkeypatch):
+    client = _app(monkeypatch, _CountAwareStub)
+    for user, may_replace in ((OWNER, True), (ADMIN, True), (MEMBER, False)):
+        for method, path, body, reaches in COUNT_SETTERS:
+            response = _send(client, user, method, path, body)
+            assert response.json() == {"reached": f"{reaches} can_correct={may_replace}"}, (
+                ROLES[user][WORKSPACE],
+                path,
+                response.text,
+            )
+
+
+@pytest.mark.parametrize(
+    "refusal, status_code",
+    [
+        (StockPermissionError("Only workspace owners and admins can correct a stock count."), 403),
+        (StockConflictError("The stock at Main Warehouse changed while you were counting"), 409),
+        (ValueError("Insufficient available stock at Main Warehouse"), 400),
+    ],
+)
+def test_a_refused_stock_change_says_why_with_a_matching_status(monkeypatch, refusal, status_code):
+    class _Refusing:
+        def __getattr__(self, name):
+            def call(*args, **kwargs):
+                raise refusal
+
+            return call
+
+    client = _app(monkeypatch, _Refusing)
+    for path, body in (
+        ("/inventory/movements", {"type": "SOLD", "variant_id": VARIANT, "location_id": LOCATION, "qty": 1}),
+        ("/inventory/set-stock", STOCK),
+    ):
+        response = _send(client, OWNER, "POST", path, body)
+        assert (response.status_code, response.json()["detail"]) == (status_code, str(refusal)), path
 
 
 def test_every_catalog_route_is_listed_as_a_change_or_a_read():

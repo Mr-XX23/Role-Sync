@@ -21,6 +21,7 @@ import {
   ChevronDown,
   Filter,
   Zap,
+  History,
 } from 'lucide-react';
 import {
   catalogApi,
@@ -37,6 +38,7 @@ interface InventoryMatrixTabProps {
   parentAvailabilities?: Record<string, VariantAvailabilityResponse>;
   onOpenAdjustStock: (variantId?: string, locationId?: string) => void;
   onOpenTransferStock: (sku?: string) => void;
+  onOpenStockHistory?: (variantId?: string, locationId?: string) => void;
   onOpenDealStockCheck?: (sku?: string) => void;
   onOpenLocations?: () => void;
   onRefresh: () => void;
@@ -211,6 +213,7 @@ export const InventoryMatrixTab: React.FC<InventoryMatrixTabProps> = ({
   parentAvailabilities,
   onOpenAdjustStock,
   onOpenTransferStock,
+  onOpenStockHistory,
   onOpenDealStockCheck,
   onOpenLocations,
   onRefresh,
@@ -676,6 +679,16 @@ export const InventoryMatrixTab: React.FC<InventoryMatrixTabProps> = ({
               <ArrowRightLeft className="w-3.5 h-3.5 text-primary" />
               Transfer
             </button>
+            {onOpenStockHistory && (
+              <button
+                onClick={() => onOpenStockHistory(undefined, selectedLocation?.id)}
+                className="h-10 px-4 text-xs font-semibold rounded-xl border border-border/80 hover:bg-muted/60 text-foreground transition-colors flex items-center gap-2 cursor-pointer"
+                title="What happened to stock: received, sold, shipped, damaged, lost, returned and corrected"
+              >
+                <History className="w-3.5 h-3.5 text-primary" />
+                Stock History
+              </button>
+            )}
             {onOpenDealStockCheck && (
               <button
                 onClick={() => onOpenDealStockCheck()}
@@ -951,6 +964,16 @@ export const InventoryMatrixTab: React.FC<InventoryMatrixTabProps> = ({
                               <ArrowRightLeft className="w-3.5 h-3.5" />
                               Transfer
                             </button>
+                            {onOpenStockHistory && (
+                              <button
+                                onClick={() => onOpenStockHistory(variant.id, selectedLocation?.id)}
+                                className="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-border/80 bg-background hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                                title="Stock history for this SKU"
+                                aria-label={`Stock history for ${variant.sku}`}
+                              >
+                                <History className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>

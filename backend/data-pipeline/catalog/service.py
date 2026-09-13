@@ -3,11 +3,12 @@ import json
 import logging
 import os
 import re
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import or_, func, text
+from sqlalchemy import case, or_, func, text
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from catalog.search_ranking import SearchableProduct, rank_products
@@ -22,6 +23,17 @@ from catalog.models import (
     Location,
     InventoryLevel,
     StockMovement,
+    STOCK_MOVEMENT_REASONS,
+)
+from catalog.stock_movements import (
+    HOLD_REASONS,
+    MAX_ON_HAND,
+    StockConflictError,
+    StockPermissionError,
+    add_to_totals,
+    clean_text,
+    empty_totals,
+    movement_type,
 )
 from catalog.schemas import (
     CategoryCreate,
@@ -37,6 +49,14 @@ from catalog.schemas import (
     ReservationResponse,
     ReleaseStockResponse,
     TransferStockResponse,
+    RecordMovementRequest,
+    RecordMovementResponse,
+    StockLevelChange,
+    StockMovementEntry,
+    StockMovementHistoryResponse,
+    StockMovementTotals,
+    LocationStockSummary,
+    StockMovementSummaryResponse,
     LocationAvailability,
     VariantAvailabilityResponse,
     CheckAvailabilityResponse,
@@ -645,6 +665,127 @@ class ProductService:
             inv = query.one()
         return inv
 
+    # The rules for changing a count live in catalog.stock_movements.
+
+    def _tenant_variant(self, tenant_id: UUID, variant_id: UUID) -> Variant:
+        variant = (
+            self.db.query(Variant)
+            .filter(Variant.tenant_id == tenant_id, Variant.id == variant_id)
+            .first()
+        )
+        if not variant:
+            raise ValueError(f"Variant '{variant_id}' not found")
+        return variant
+
+    def _tenant_location(self, tenant_id: UUID, location_id: UUID, label: str = "Location") -> Location:
+        location = (
+            self.db.query(Location)
+            .filter(Location.tenant_id == tenant_id, Location.id == location_id)
+            .first()
+        )
+        if not location:
+            raise ValueError(f"{label} '{location_id}' not found")
+        return location
+
+    def _lock_levels(
+        self, tenant_id: UUID, variant_id: UUID, location_ids: List[UUID]
+    ) -> Dict[UUID, InventoryLevel]:
+        """Row-lock a variant's stock at each location, always in the same order so that two
+        changes touching the same pair of locations can't deadlock."""
+        return {
+            location_id: self._get_or_create_inventory_level(
+                tenant_id, variant_id, location_id, for_update=True
+            )
+            for location_id in sorted(set(location_ids))
+        }
+
+    def _write_movement(
+        self,
+        inv: InventoryLevel,
+        delta: int,
+        reason: str,
+        *,
+        tenant_id: UUID,
+        created_by: Optional[str] = None,
+        ref_id: Optional[UUID] = None,
+        note: Optional[str] = None,
+        reference: Optional[str] = None,
+        counterparty: Optional[str] = None,
+    ) -> StockMovement:
+        """Apply ``delta`` to a locked stock level and record it in the ledger."""
+        new_qty = inv.qty_on_hand + delta
+        if new_qty > MAX_ON_HAND:
+            raise ValueError(f"A location can't hold more than {MAX_ON_HAND} units of one item")
+        inv.qty_on_hand = new_qty
+        movement = StockMovement(
+            inv_level_id=inv.id,
+            tenant_id=tenant_id,
+            delta=delta,
+            reason=reason,
+            ref_id=ref_id,
+            note=note,
+            reference=reference,
+            counterparty=counterparty,
+            on_hand_after=new_qty,
+            # Wall-clock time, not the transaction's start: rows written together (a return
+            # and its write-off) then list in the order they happened.
+            at=func.clock_timestamp(),
+            created_by=created_by,
+        )
+        self.db.add(movement)
+        return movement
+
+    @staticmethod
+    def _require_available(inv: InventoryLevel, location: Location, qty: int, doing: str) -> None:
+        available = inv.qty_on_hand - inv.qty_reserved
+        if qty > available:
+            raise ValueError(
+                f"Insufficient available stock at {location.name}: {max(available, 0)} available "
+                f"({inv.qty_on_hand} on hand, {inv.qty_reserved} reserved), so {qty} can't be {doing}"
+            )
+
+    @staticmethod
+    def _require_correction_rights(can_correct: bool, note: Optional[str]) -> None:
+        if not can_correct:
+            raise StockPermissionError(
+                "Only workspace owners and admins can correct a stock count. Record what happened "
+                "instead: stock received, sold, shipped, damaged, lost or returned."
+            )
+        if not clean_text(note):
+            raise ValueError("A count correction needs a note saying why the count is changing")
+
+    def _set_count(
+        self,
+        inv: InventoryLevel,
+        qty: int,
+        reason: str,
+        *,
+        tenant_id: UUID,
+        ref_id: Optional[UUID],
+        note: Optional[str],
+        created_by: Optional[str],
+        can_correct: bool,
+    ) -> None:
+        delta = qty - inv.qty_on_hand
+        if delta == 0:
+            return
+        opening = reason == "RESTOCK" and inv.qty_on_hand == 0
+        if not opening:
+            self._require_correction_rights(can_correct, note)
+        if qty < inv.qty_reserved:
+            raise ValueError(
+                f"Cannot set qty_on_hand ({qty}) less than reserved ({inv.qty_reserved})"
+            )
+        self._write_movement(
+            inv,
+            delta,
+            "RESTOCK" if opening else "ADJUST",
+            tenant_id=tenant_id,
+            created_by=created_by,
+            ref_id=ref_id,
+            note=clean_text(note) or f"Stock set to {qty} (delta {delta:+d})",
+        )
+
     def set_stock(
         self,
         tenant_id: UUID,
@@ -655,53 +796,38 @@ class ProductService:
         ref_id: Optional[UUID] = None,
         note: Optional[str] = None,
         created_by: Optional[str] = None,
+        *,
+        can_correct: bool = False,
     ) -> InventoryLevel:
+        """Set the on-hand count of a variant at a location.
+
+        Where there is no stock yet this is opening stock, recorded as received (RESTOCK).
+        Replacing an existing count, or any ``reason="ADJUST"``, is a count correction:
+        ``can_correct`` (owners and admins) and a note are required.
+        """
         if qty < 0:
             raise ValueError(f"qty cannot be negative (got {qty})")
+        self._tenant_variant(tenant_id, variant_id)
+        self._tenant_location(tenant_id, location_id)
 
-        # Validate variant belongs to tenant
-        variant = (
-            self.db.query(Variant)
-            .filter(Variant.tenant_id == tenant_id, Variant.id == variant_id)
-            .first()
-        )
-        if not variant:
-            raise ValueError(f"Variant '{variant_id}' not found")
-
-        # Validate location belongs to tenant
-        location = (
-            self.db.query(Location)
-            .filter(Location.tenant_id == tenant_id, Location.id == location_id)
-            .first()
-        )
-        if not location:
-            raise ValueError(f"Location '{location_id}' not found")
-
-        inv = self._get_or_create_inventory_level(
-            tenant_id, variant_id, location_id, for_update=True
-        )
-
-        if qty < inv.qty_reserved:
-            raise ValueError(
-                f"Cannot set qty_on_hand ({qty}) less than reserved ({inv.qty_reserved})"
+        try:
+            inv = self._get_or_create_inventory_level(
+                tenant_id, variant_id, location_id, for_update=True
             )
-
-        delta = qty - inv.qty_on_hand
-
-        if delta != 0:
-            movement = StockMovement(
-                inv_level_id=inv.id,
+            self._set_count(
+                inv,
+                qty,
+                reason,
                 tenant_id=tenant_id,
-                delta=delta,
-                reason=reason,
                 ref_id=ref_id,
-                note=note or f"Stock set to {qty} (delta {delta:+d})",
+                note=note,
                 created_by=created_by,
+                can_correct=can_correct,
             )
-            self.db.add(movement)
-            inv.qty_on_hand = qty
-
-        self.db.commit()
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         self.db.refresh(inv)
         return inv
 
@@ -710,8 +836,10 @@ class ProductService:
         tenant_id: UUID,
         items: List[Any],
         created_by: Optional[str] = None,
+        *,
+        can_correct: bool = False,
     ) -> List[InventoryLevel]:
-        """Atomically set stock levels for multiple (variant, location) pairs in a single database transaction."""
+        """``set_stock`` for many (variant, location) pairs in one transaction: all or nothing."""
         if not items:
             return []
 
@@ -742,42 +870,37 @@ class ProductService:
             raise ValueError(f"One or more locations not found in tenant: {missing_locations}")
 
         updated_levels = []
-        for item in items:
-            v_id = getattr(item, "variant_id", None) or item["variant_id"]
-            l_id = getattr(item, "location_id", None) or item["location_id"]
-            qty = getattr(item, "qty", None) if hasattr(item, "qty") else item["qty"]
-            reason = getattr(item, "reason", "RESTOCK") if hasattr(item, "reason") else item.get("reason", "RESTOCK")
-            ref_id = getattr(item, "ref_id", None) if hasattr(item, "ref_id") else item.get("ref_id")
-            note = getattr(item, "note", None) if hasattr(item, "note") else item.get("note")
+        try:
+            for item in items:
+                v_id = getattr(item, "variant_id", None) or item["variant_id"]
+                l_id = getattr(item, "location_id", None) or item["location_id"]
+                qty = getattr(item, "qty", None) if hasattr(item, "qty") else item["qty"]
+                reason = getattr(item, "reason", "RESTOCK") if hasattr(item, "reason") else item.get("reason", "RESTOCK")
+                ref_id = getattr(item, "ref_id", None) if hasattr(item, "ref_id") else item.get("ref_id")
+                note = getattr(item, "note", None) if hasattr(item, "note") else item.get("note")
 
-            if qty < 0:
-                raise ValueError(f"qty cannot be negative (got {qty})")
+                if qty < 0:
+                    raise ValueError(f"qty cannot be negative (got {qty})")
 
-            inv = self._get_or_create_inventory_level(
-                tenant_id, v_id, l_id, for_update=True
-            )
-            if qty < inv.qty_reserved:
-                raise ValueError(
-                    f"Cannot set qty_on_hand ({qty}) less than reserved ({inv.qty_reserved})"
+                inv = self._get_or_create_inventory_level(
+                    tenant_id, v_id, l_id, for_update=True
                 )
-
-            delta = qty - inv.qty_on_hand
-            if delta != 0:
-                movement = StockMovement(
-                    inv_level_id=inv.id,
+                self._set_count(
+                    inv,
+                    qty,
+                    reason,
                     tenant_id=tenant_id,
-                    delta=delta,
-                    reason=reason,
                     ref_id=ref_id,
-                    note=note or f"Stock set to {qty} (delta {delta:+d})",
+                    note=note,
                     created_by=created_by,
+                    can_correct=can_correct,
                 )
-                self.db.add(movement)
-                inv.qty_on_hand = qty
+                updated_levels.append(inv)
 
-            updated_levels.append(inv)
-
-        self.db.commit()
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         for inv in updated_levels:
             self.db.refresh(inv)
         return updated_levels
@@ -792,50 +915,54 @@ class ProductService:
         ref_id: Optional[UUID] = None,
         note: Optional[str] = None,
         created_by: Optional[str] = None,
+        *,
+        can_correct: bool = False,
     ) -> InventoryLevel:
-        # Validate variant belongs to tenant
-        variant = (
-            self.db.query(Variant)
-            .filter(Variant.tenant_id == tenant_id, Variant.id == variant_id)
-            .first()
-        )
-        if not variant:
-            raise ValueError(f"Variant '{variant_id}' not found")
+        """Change the on-hand count of a variant at a location by ``delta``.
 
-        # Validate location belongs to tenant
-        location = (
-            self.db.query(Location)
-            .filter(Location.tenant_id == tenant_id, Location.id == location_id)
-            .first()
-        )
-        if not location:
-            raise ValueError(f"Location '{location_id}' not found")
+        RESTOCK adds; SALE and DAMAGE remove available units (a sale only at a sellable
+        location). ADJUST is a count correction: ``can_correct`` and a note are required.
+        """
+        self._tenant_variant(tenant_id, variant_id)
+        location = self._tenant_location(tenant_id, location_id)
 
-        inv = self._get_or_create_inventory_level(
-            tenant_id, variant_id, location_id, for_update=True
-        )
-        new_qty = inv.qty_on_hand + delta
-        if new_qty < 0:
-            raise ValueError(
-                f"Adjustment delta {delta:+d} would result in negative qty_on_hand ({new_qty})"
+        if delta == 0:
+            raise ValueError("delta must not be zero")
+        if reason == "ADJUST":
+            self._require_correction_rights(can_correct, note)
+        elif reason == "RESTOCK" and delta < 0:
+            raise ValueError("RESTOCK adds stock; lowering a count is a count correction (ADJUST)")
+        elif reason in ("SALE", "DAMAGE") and delta > 0:
+            raise ValueError(f"{reason} removes stock; raising a count is RESTOCK or a count correction (ADJUST)")
+        if reason == "SALE" and not location.sellable:
+            raise ValueError(f"{location.name} is not a sellable location, so nothing can be sold from it")
+
+        try:
+            inv = self._get_or_create_inventory_level(
+                tenant_id, variant_id, location_id, for_update=True
             )
-        if new_qty < inv.qty_reserved:
-            raise ValueError(
-                f"Adjustment delta {delta:+d} would result in qty_on_hand ({new_qty}) less than reserved ({inv.qty_reserved})"
+            new_qty = inv.qty_on_hand + delta
+            if new_qty < 0:
+                raise ValueError(
+                    f"Adjustment delta {delta:+d} would result in negative qty_on_hand ({new_qty})"
+                )
+            if new_qty < inv.qty_reserved:
+                raise ValueError(
+                    f"Adjustment delta {delta:+d} would result in qty_on_hand ({new_qty}) less than reserved ({inv.qty_reserved})"
+                )
+            self._write_movement(
+                inv,
+                delta,
+                reason,
+                tenant_id=tenant_id,
+                created_by=created_by,
+                ref_id=ref_id,
+                note=clean_text(note) or f"Stock adjusted by {delta:+d} to {new_qty}",
             )
-
-        inv.qty_on_hand = new_qty
-        movement = StockMovement(
-            inv_level_id=inv.id,
-            tenant_id=tenant_id,
-            delta=delta,
-            reason=reason,
-            ref_id=ref_id,
-            note=note or f"Stock adjusted by {delta:+d} to {new_qty}",
-            created_by=created_by,
-        )
-        self.db.add(movement)
-        self.db.commit()
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         self.db.refresh(inv)
         return inv
 
@@ -956,6 +1083,7 @@ class ProductService:
                 reason="RESERVE",
                 ref_id=reservation_id,
                 note=f"Reserved {qty} units for SKU {sku}",
+                on_hand_after=inv.qty_on_hand,
                 created_by=created_by,
             )
             self.db.add(movement)
@@ -1011,6 +1139,7 @@ class ProductService:
                     reason="RESERVE",
                     ref_id=reservation_id,
                     note=f"Reserved {alloc.qty} units for SKU {sku}",
+                    on_hand_after=inv.qty_on_hand,
                     created_by=created_by,
                 )
                 self.db.add(movement)
@@ -1082,6 +1211,7 @@ class ProductService:
                 reason="RELEASE",
                 ref_id=reservation_id,
                 note=f"Released {release_qty} units from reservation {reservation_id}",
+                on_hand_after=inv.qty_on_hand,
                 created_by=created_by,
             )
             self.db.add(rel_movement)
@@ -1093,6 +1223,24 @@ class ProductService:
             movements_count=len(movements),
         )
 
+    def _ship(
+        self,
+        source: InventoryLevel,
+        destination: InventoryLevel,
+        from_location: Location,
+        qty: int,
+        *,
+        tenant_id: UUID,
+        **movement: Any,
+    ) -> List[StockMovement]:
+        """Move available units between two locked stock levels: a TRANSFER_OUT and a
+        TRANSFER_IN row sharing one ref_id."""
+        self._require_available(source, from_location, qty, "shipped")
+        return [
+            self._write_movement(source, -qty, "TRANSFER_OUT", tenant_id=tenant_id, **movement),
+            self._write_movement(destination, qty, "TRANSFER_IN", tenant_id=tenant_id, **movement),
+        ]
+
     def transfer(
         self,
         tenant_id: UUID,
@@ -1102,6 +1250,7 @@ class ProductService:
         qty: int,
         note: Optional[str] = None,
         created_by: Optional[str] = None,
+        reference: Optional[str] = None,
     ) -> TransferStockResponse:
         """Inter-location inventory transfer with row locking and paired ledger movements."""
         if qty <= 0:
@@ -1109,78 +1258,373 @@ class ProductService:
         if from_location_id == to_location_id:
             raise ValueError("Source and destination locations must be distinct")
 
-        # Validate variant belongs to tenant
         variant = self.get_variant(tenant_id, sku)
-
-        # Validate both locations belong to tenant
-        from_loc = (
-            self.db.query(Location)
-            .filter(Location.tenant_id == tenant_id, Location.id == from_location_id)
-            .first()
-        )
-        if not from_loc:
-            raise ValueError(f"Source location '{from_location_id}' not found")
-
-        to_loc = (
-            self.db.query(Location)
-            .filter(Location.tenant_id == tenant_id, Location.id == to_location_id)
-            .first()
-        )
-        if not to_loc:
-            raise ValueError(f"Destination location '{to_location_id}' not found")
-
-        # Lock both inventory rows in deterministic UUID order to avoid deadlocks
-        ordered_ids = sorted([from_location_id, to_location_id])
-        for loc_id in ordered_ids:
-            self._get_or_create_inventory_level(
-                tenant_id, variant.id, loc_id, for_update=True
-            )
-
-        from_inv = self._get_or_create_inventory_level(
-            tenant_id, variant.id, from_location_id, for_update=True
-        )
-        to_inv = self._get_or_create_inventory_level(
-            tenant_id, variant.id, to_location_id, for_update=True
-        )
-
-        from_avail = from_inv.qty_on_hand - from_inv.qty_reserved
-        if from_avail < qty:
-            raise ValueError(
-                f"Insufficient available stock at source location: available {from_avail}, requested {qty}"
-            )
+        from_loc = self._tenant_location(tenant_id, from_location_id, "Source location")
+        self._tenant_location(tenant_id, to_location_id, "Destination location")
 
         transfer_ref = uuid4()
-        from_inv.qty_on_hand -= qty
-        out_movement = StockMovement(
-            inv_level_id=from_inv.id,
-            tenant_id=tenant_id,
-            delta=-qty,
-            reason="TRANSFER_OUT",
-            ref_id=transfer_ref,
-            note=note or f"Transfer out {qty} units of SKU {sku} to location {to_location_id}",
-            created_by=created_by,
-        )
-        self.db.add(out_movement)
-
-        to_inv.qty_on_hand += qty
-        in_movement = StockMovement(
-            inv_level_id=to_inv.id,
-            tenant_id=tenant_id,
-            delta=qty,
-            reason="TRANSFER_IN",
-            ref_id=transfer_ref,
-            note=note or f"Transfer in {qty} units of SKU {sku} from location {from_location_id}",
-            created_by=created_by,
-        )
-        self.db.add(in_movement)
-
-        self.db.commit()
+        try:
+            levels = self._lock_levels(tenant_id, variant.id, [from_location_id, to_location_id])
+            self._ship(
+                levels[from_location_id],
+                levels[to_location_id],
+                from_loc,
+                qty,
+                tenant_id=tenant_id,
+                created_by=created_by,
+                ref_id=transfer_ref,
+                note=clean_text(note),
+                reference=clean_text(reference),
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         return TransferStockResponse(
             ref_id=transfer_ref,
             sku=sku,
             from_location_id=from_location_id,
             to_location_id=to_location_id,
             qty=qty,
+        )
+
+    # -----------------------------------------------------------------------
+    # Stock Movements: record what happened, read the history and totals
+    # -----------------------------------------------------------------------
+
+    def record_movement(
+        self,
+        tenant_id: UUID,
+        data: RecordMovementRequest,
+        *,
+        created_by: Optional[str] = None,
+        can_correct: bool = False,
+    ) -> RecordMovementResponse:
+        """Record one thing that happened to stock at a location (rules: catalog.stock_movements)."""
+        kind = data.type
+        note = clean_text(data.note)
+        movement: Dict[str, Any] = {
+            "created_by": created_by,
+            "ref_id": uuid4(),
+            "note": note,
+            "reference": clean_text(data.reference),
+            "counterparty": clean_text(data.counterparty),
+        }
+
+        variant = self._tenant_variant(tenant_id, data.variant_id)
+        location = self._tenant_location(tenant_id, data.location_id)
+        places = [location]
+        if kind == "COUNT_CORRECTION":
+            self._require_correction_rights(can_correct, note)
+        elif data.qty < 1:
+            raise ValueError("Enter a quantity of at least 1")
+        if kind == "SHIPPED":
+            if data.to_location_id is None:
+                raise ValueError("Choose the location the stock is shipped to")
+            if data.to_location_id == data.location_id:
+                raise ValueError("Stock can't be shipped to the location it is already at")
+            places.append(self._tenant_location(tenant_id, data.to_location_id, "Destination location"))
+        if kind == "SOLD" and not location.sellable:
+            raise ValueError(
+                f"{location.name} is not a sellable location, so nothing can be sold from it. "
+                "Ship the stock to a sellable location first."
+            )
+
+        try:
+            levels = self._lock_levels(tenant_id, variant.id, [place.id for place in places])
+            inv = levels[location.id]
+            before = {location_id: level.qty_on_hand for location_id, level in levels.items()}
+            rows: List[StockMovement] = []
+
+            if kind == "RECEIVED":
+                rows.append(self._write_movement(inv, data.qty, "RESTOCK", tenant_id=tenant_id, **movement))
+            elif kind in ("SOLD", "DAMAGED", "LOST"):
+                reason, doing = {
+                    "SOLD": ("SALE", "sold"),
+                    "DAMAGED": ("DAMAGE", "written off as damaged"),
+                    "LOST": ("LOST", "written off as lost"),
+                }[kind]
+                self._require_available(inv, location, data.qty, doing)
+                rows.append(self._write_movement(inv, -data.qty, reason, tenant_id=tenant_id, **movement))
+            elif kind == "SHIPPED":
+                rows.extend(
+                    self._ship(inv, levels[places[1].id], location, data.qty, tenant_id=tenant_id, **movement)
+                )
+            elif kind == "RETURNED":
+                rows.append(self._write_movement(inv, data.qty, "RETURN", tenant_id=tenant_id, **movement))
+                if not data.resellable:
+                    # Counted as returned, then written off: back in the building, not sellable.
+                    write_off = {**movement, "note": note or "Returned by a customer and can't be sold again"}
+                    rows.append(self._write_movement(inv, -data.qty, "DAMAGE", tenant_id=tenant_id, **write_off))
+            else:  # COUNT_CORRECTION
+                if data.expected_on_hand is not None and data.expected_on_hand != inv.qty_on_hand:
+                    raise StockConflictError(
+                        f"The stock at {location.name} changed while you were counting: it is now "
+                        f"{inv.qty_on_hand}, not {data.expected_on_hand}. Check your count against the "
+                        "new figure and save again."
+                    )
+                if data.qty < inv.qty_reserved:
+                    raise ValueError(
+                        f"{inv.qty_reserved} units at {location.name} are reserved for customers, so the "
+                        f"count can't go below {inv.qty_reserved}. Release those reservations first if "
+                        "the units are gone."
+                    )
+                if data.qty != inv.qty_on_hand:
+                    rows.append(
+                        self._write_movement(
+                            inv, data.qty - inv.qty_on_hand, "ADJUST", tenant_id=tenant_id, **movement
+                        )
+                    )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+
+        written = [row.id for row in rows]
+        found = (
+            self._movement_rows(tenant_id)
+            .filter(StockMovement.id.in_(written))
+            .order_by(StockMovement.at.asc())
+            .all()
+            if written
+            else []
+        )
+        entries = self._movement_entries(tenant_id, found)
+        return RecordMovementResponse(
+            type=kind,
+            ref_id=movement["ref_id"],
+            changed=bool(rows),
+            levels=[
+                StockLevelChange(
+                    location_id=place.id,
+                    location_name=place.name,
+                    qty_on_hand_before=before[place.id],
+                    qty_on_hand=levels[place.id].qty_on_hand,
+                    qty_reserved=levels[place.id].qty_reserved,
+                    qty_available=max(0, levels[place.id].qty_on_hand - levels[place.id].qty_reserved),
+                )
+                for place in places
+            ],
+            movements=entries,
+        )
+
+    def _movement_rows(self, tenant_id: UUID):
+        """Ledger rows of a tenant with the names a person needs to read them."""
+        return (
+            self.db.query(
+                StockMovement,
+                Variant.id.label("variant_id"),
+                Variant.sku.label("sku"),
+                Product.id.label("product_id"),
+                Product.name.label("product_name"),
+                Location.id.label("location_id"),
+                Location.name.label("location_name"),
+            )
+            .join(InventoryLevel, InventoryLevel.id == StockMovement.inv_level_id)
+            .join(Variant, Variant.id == InventoryLevel.variant_id)
+            .join(Product, Product.id == Variant.product_id)
+            .join(Location, Location.id == InventoryLevel.location_id)
+            .filter(StockMovement.tenant_id == tenant_id, InventoryLevel.tenant_id == tenant_id)
+        )
+
+    def _movement_entries(self, tenant_id: UUID, rows: List[Any]) -> List[StockMovementEntry]:
+        if not rows:
+            return []
+
+        labels: Dict[UUID, List[str]] = {}
+        for variant_id, value in (
+            self.db.query(VariantOptionValue.variant_id, OptionValue.value)
+            .join(OptionValue, OptionValue.id == VariantOptionValue.option_value_id)
+            .join(ProductOption, ProductOption.id == OptionValue.option_id)
+            .filter(
+                VariantOptionValue.tenant_id == tenant_id,
+                VariantOptionValue.variant_id.in_({row.variant_id for row in rows}),
+            )
+            .order_by(ProductOption.position.asc(), OptionValue.position.asc())
+        ):
+            labels.setdefault(variant_id, []).append(value)
+
+        # The other end of each shipment, which a location filter may have left out.
+        shipments = {row[0].ref_id for row in rows if row[0].reason in ("TRANSFER_OUT", "TRANSFER_IN") and row[0].ref_id}
+        ends: Dict[tuple, tuple] = {}
+        if shipments:
+            for ref_id, reason, end_id, end_name in (
+                self.db.query(StockMovement.ref_id, StockMovement.reason, Location.id, Location.name)
+                .join(InventoryLevel, InventoryLevel.id == StockMovement.inv_level_id)
+                .join(Location, Location.id == InventoryLevel.location_id)
+                .filter(
+                    StockMovement.tenant_id == tenant_id,
+                    StockMovement.ref_id.in_(shipments),
+                    StockMovement.reason.in_(("TRANSFER_OUT", "TRANSFER_IN")),
+                )
+            ):
+                ends[(ref_id, reason)] = (end_id, end_name)
+
+        entries = []
+        for row in rows:
+            m = row[0]
+            other = None
+            if m.reason == "TRANSFER_OUT":
+                other = ends.get((m.ref_id, "TRANSFER_IN"))
+            elif m.reason == "TRANSFER_IN":
+                other = ends.get((m.ref_id, "TRANSFER_OUT"))
+            entries.append(
+                StockMovementEntry(
+                    id=m.id,
+                    at=m.at,
+                    type=movement_type(m.reason, m.delta),
+                    reason=m.reason,
+                    delta=m.delta,
+                    on_hand_after=m.on_hand_after,
+                    variant_id=row.variant_id,
+                    sku=row.sku,
+                    product_id=row.product_id,
+                    product_name=row.product_name,
+                    variant_label=" / ".join(labels.get(row.variant_id, [])) or None,
+                    location_id=row.location_id,
+                    location_name=row.location_name,
+                    other_location_id=other[0] if other else None,
+                    other_location_name=other[1] if other else None,
+                    counterparty=m.counterparty,
+                    reference=m.reference,
+                    note=m.note,
+                    ref_id=m.ref_id,
+                    created_by=m.created_by,
+                )
+            )
+        return entries
+
+    def list_movements(
+        self,
+        tenant_id: UUID,
+        *,
+        variant_id: Optional[UUID] = None,
+        location_id: Optional[UUID] = None,
+        reasons: Optional[List[str]] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        include_holds: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> StockMovementHistoryResponse:
+        """Stock ledger rows, newest first. Reservation holds are left out unless asked for."""
+        unknown = set(reasons or ()) - set(STOCK_MOVEMENT_REASONS)
+        if unknown:
+            raise ValueError(f"Unknown movement reason: {', '.join(sorted(unknown))}")
+
+        query = self._movement_rows(tenant_id)
+        if variant_id is not None:
+            query = query.filter(InventoryLevel.variant_id == variant_id)
+        if location_id is not None:
+            query = query.filter(InventoryLevel.location_id == location_id)
+        if reasons:
+            query = query.filter(StockMovement.reason.in_(reasons))
+        elif not include_holds:
+            query = query.filter(StockMovement.reason.notin_(HOLD_REASONS))
+        if date_from is not None:
+            query = query.filter(StockMovement.at >= date_from)
+        if date_to is not None:
+            query = query.filter(StockMovement.at < date_to)
+
+        total = query.count()
+        rows = (
+            query.order_by(StockMovement.at.desc(), StockMovement.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return StockMovementHistoryResponse(
+            items=self._movement_entries(tenant_id, rows),
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+
+    def movement_summary(
+        self,
+        tenant_id: UUID,
+        *,
+        variant_id: Optional[UUID] = None,
+        location_id: Optional[UUID] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+    ) -> StockMovementSummaryResponse:
+        """Per-location totals of what happened to stock in a period, next to current stock."""
+        units_in = func.coalesce(func.sum(case((StockMovement.delta > 0, StockMovement.delta), else_=0)), 0)
+        units_out = func.coalesce(func.sum(case((StockMovement.delta < 0, -StockMovement.delta), else_=0)), 0)
+        moved = (
+            self.db.query(
+                InventoryLevel.location_id,
+                StockMovement.reason,
+                units_in,
+                units_out,
+                func.count(StockMovement.id),
+            )
+            .join(InventoryLevel, InventoryLevel.id == StockMovement.inv_level_id)
+            .filter(
+                StockMovement.tenant_id == tenant_id,
+                InventoryLevel.tenant_id == tenant_id,
+                StockMovement.reason.notin_(HOLD_REASONS),
+            )
+        )
+        stock = self.db.query(
+            InventoryLevel.location_id,
+            func.coalesce(func.sum(InventoryLevel.qty_on_hand), 0),
+            func.coalesce(func.sum(InventoryLevel.qty_reserved), 0),
+            func.coalesce(func.sum(func.greatest(0, InventoryLevel.qty_on_hand - InventoryLevel.qty_reserved)), 0),
+        ).filter(InventoryLevel.tenant_id == tenant_id)
+        places = self.db.query(Location).filter(Location.tenant_id == tenant_id)
+
+        if variant_id is not None:
+            moved = moved.filter(InventoryLevel.variant_id == variant_id)
+            stock = stock.filter(InventoryLevel.variant_id == variant_id)
+        if location_id is not None:
+            moved = moved.filter(InventoryLevel.location_id == location_id)
+            stock = stock.filter(InventoryLevel.location_id == location_id)
+            places = places.filter(Location.id == location_id)
+        if date_from is not None:
+            moved = moved.filter(StockMovement.at >= date_from)
+        if date_to is not None:
+            moved = moved.filter(StockMovement.at < date_to)
+
+        totals_by_location: Dict[UUID, Dict[str, int]] = {}
+        for place_id, reason, qty_in, qty_out, count in moved.group_by(
+            InventoryLevel.location_id, StockMovement.reason
+        ):
+            add_to_totals(
+                totals_by_location.setdefault(place_id, empty_totals()), reason, int(qty_in), int(qty_out), int(count)
+            )
+        stock_by_location = {
+            place_id: (int(on_hand), int(reserved), int(free))
+            for place_id, on_hand, reserved, free in stock.group_by(InventoryLevel.location_id)
+        }
+
+        overall = empty_totals()
+        summaries = []
+        for place in places.order_by(Location.priority.asc(), Location.name.asc()):
+            totals = totals_by_location.get(place.id, empty_totals())
+            on_hand, reserved, free = stock_by_location.get(place.id, (0, 0, 0))
+            summaries.append(
+                LocationStockSummary(
+                    location_id=place.id,
+                    location_name=place.name,
+                    location_type=place.type,
+                    sellable=place.sellable,
+                    qty_on_hand=on_hand,
+                    qty_reserved=reserved,
+                    qty_available=free if place.sellable else 0,
+                    **totals,
+                )
+            )
+            for field, value in totals.items():
+                overall[field] += value
+
+        return StockMovementSummaryResponse(
+            variant_id=variant_id,
+            date_from=date_from,
+            date_to=date_to,
+            locations=summaries,
+            totals=StockMovementTotals(**overall),
         )
 
     # -----------------------------------------------------------------------
