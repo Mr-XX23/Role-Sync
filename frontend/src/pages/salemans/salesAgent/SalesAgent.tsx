@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { Bot, Brain, MessageSquarePlus, Send, Sparkles } from 'lucide-react';
 import { Button } from '../../../components/common/Button';
+import { InfoTooltip } from '../../../components/common/InfoTooltip';
 import { useToast } from '../../../context/ToastContext';
 import { useAppSelector } from '../../../store';
 import { describeAgentError, salesAgentApi } from '../../../api/salesAgentApi';
@@ -157,15 +158,15 @@ export const SalesAgent: React.FC = () => {
 
   return (
     <div className="h-full flex flex-col gap-6 pb-4 animate-in fade-in duration-500">
-      <section className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-        <div className="space-y-2">
+      <section className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-1.5 min-w-0">
           <h2 className="font-serif text-3xl font-bold text-primary">Sales Agent</h2>
-          <p className="text-sm text-muted-foreground max-w-2xl leading-relaxed">
+          <InfoTooltip label="About the sales agent">
             Ask for research, outreach, documents, quotes, deals or catalog updates in plain language. The agent gathers
             what it needs, hands bigger pieces to its research, outreach and quote sub-agents, and prepares each action —
             nothing changes until you approve it. It remembers what it learns about you and your customers, and if a
             later step fails it asks before undoing what was already done.
-          </p>
+          </InfoTooltip>
         </div>
         <Button
           variant="outline"
