@@ -2,7 +2,6 @@ import os
 import uuid
 import re
 import hashlib
-import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends
@@ -35,6 +34,7 @@ from module_1_document_processing.pipeline.job_payloads import (
     stage_bytes,
 )
 from module_1_document_processing.pipeline import ingestion_guards as guards
+from module_1_document_processing.pipeline import safe_fetch
 from module_1_document_processing.pipeline.canonical_store import CanonicalStore
 from module_1_document_processing.parsing.media_queue import MEDIA_PENDING
 from module_3_batch_ingestion_vector.delta_checker import VersionedHashDB
@@ -994,16 +994,19 @@ def ingest_url(
 
     # Fetch webpage content safely. A failed fetch is reported to the caller instead
     # of silently indexing a placeholder string as though it were real content.
+    # Only public addresses are fetched, redirects included, so the vault can't be
+    # used to read internal services.
     try:
-        req_obj = urllib.request.Request(
+        raw_bytes = safe_fetch.fetch_public_url(
             url,
+            max_bytes=guards.MAX_URL_FETCH_BYTES,
+            timeout=12,
             headers={"User-Agent": "RoleSync-Knowledge-Crawler/1.0 (+https://rolesync.ai)"},
         )
-        with urllib.request.urlopen(req_obj, timeout=12) as response:
-            raw_bytes = response.read(guards.MAX_URL_FETCH_BYTES + 1)
-        if len(raw_bytes) > guards.MAX_URL_FETCH_BYTES:
-            raw_bytes = raw_bytes[: guards.MAX_URL_FETCH_BYTES]
         raw_html = raw_bytes.decode("utf-8", errors="replace")
+    except safe_fetch.UnsafeUrlError as err:
+        print(f"[KnowledgeVault] Refused to fetch {url}: {err}")
+        raise HTTPException(status_code=400, detail=safe_fetch.NOT_PUBLIC_MESSAGE)
     except Exception as err:
         print(f"[KnowledgeVault] URL fetch failed for {url}: {err}")
         raise HTTPException(status_code=502, detail=guards.URL_FETCH_FAILED_MESSAGE)
