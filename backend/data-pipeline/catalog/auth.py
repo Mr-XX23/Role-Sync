@@ -3,7 +3,7 @@ from typing import Optional
 from uuid import UUID
 from fastapi import Depends, HTTPException, Request, status
 
-from module_1_document_processing.workspace_access import WorkspaceAccess, require_writer, resolve_workspace_access
+from module_1_document_processing.workspace_access import ADMIN_ROLES, WorkspaceAccess, require_writer, resolve_workspace_access
 
 logger = logging.getLogger("catalog.auth")
 
@@ -13,6 +13,11 @@ class CatalogContext:
         self.tenant_id = tenant_id
         self.user_id = user_id
         self.role = role  # the caller's role in the workspace, as reported by workspace-service
+
+    @property
+    def is_admin(self) -> bool:
+        """Workspace owners and admins; only they may correct a stock count."""
+        return self.role in ADMIN_ROLES
 
     def __repr__(self):
         return f"CatalogContext(tenant_id={self.tenant_id}, user_id={self.user_id}, role={self.role})"

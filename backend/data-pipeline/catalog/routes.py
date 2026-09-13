@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple, Union
 from uuid import UUID
@@ -29,6 +30,10 @@ from catalog.schemas import (
     ReleaseStockResponse,
     TransferStockRequest,
     TransferStockResponse,
+    RecordMovementRequest,
+    RecordMovementResponse,
+    StockMovementHistoryResponse,
+    StockMovementSummaryResponse,
     InventoryLevelResponse,
     VariantAvailabilityResponse,
     CheckAvailabilityResponse,
@@ -43,6 +48,7 @@ from catalog.schemas import (
     SemanticSearchResponse,
 )
 from catalog.service import ProductService
+from catalog.stock_movements import StockConflictError, StockPermissionError
 from catalog.csv_importer import (
     catalog_import_worker,
     generate_csv_template,
@@ -57,6 +63,15 @@ def get_service(
     db: Session = Depends(get_catalog_db),
 ) -> ProductService:
     return ProductService(db)
+
+
+def _stock_change_refused(exc: Exception) -> HTTPException:
+    """The HTTP answer to a stock change the service refused."""
+    if isinstance(exc, StockPermissionError):
+        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    if isinstance(exc, StockConflictError):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +379,11 @@ def set_stock(
     ctx: CatalogContext = Depends(get_catalog_writer_context),
     service: ProductService = Depends(get_service),
 ):
-    """Set absolute stock quantity and log delta in the append-only ledger."""
+    """Set the on-hand count and log the delta in the ledger.
+
+    Opening stock for anyone who can edit; replacing an existing count is a count correction,
+    for owners and admins only, with a note.
+    """
     try:
         inv = service.set_stock(
             tenant_id=ctx.tenant_id,
@@ -375,6 +394,7 @@ def set_stock(
             ref_id=payload.ref_id,
             note=payload.note,
             created_by=ctx.user_id,
+            can_correct=ctx.is_admin,
         )
         return InventoryLevelResponse(
             id=inv.id,
@@ -386,8 +406,8 @@ def set_stock(
             qty_available=max(0, inv.qty_on_hand - inv.qty_reserved),
             reorder_at=inv.reorder_at,
         )
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except (ValueError, StockPermissionError) as e:
+        raise _stock_change_refused(e)
 
 
 @router.post("/inventory/batch-set-stock", response_model=List[InventoryLevelResponse])
@@ -402,6 +422,7 @@ def batch_set_stock(
             tenant_id=ctx.tenant_id,
             items=payload.items,
             created_by=ctx.user_id,
+            can_correct=ctx.is_admin,
         )
         return [
             InventoryLevelResponse(
@@ -416,8 +437,8 @@ def batch_set_stock(
             )
             for inv in updated_levels
         ]
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except (ValueError, StockPermissionError) as e:
+        raise _stock_change_refused(e)
 
 
 @router.post("/inventory/adjust-stock", response_model=InventoryLevelResponse)
@@ -437,6 +458,7 @@ def adjust_stock(
             ref_id=payload.ref_id,
             note=payload.note,
             created_by=ctx.user_id,
+            can_correct=ctx.is_admin,
         )
         return InventoryLevelResponse(
             id=inv.id,
@@ -448,8 +470,8 @@ def adjust_stock(
             qty_available=max(0, inv.qty_on_hand - inv.qty_reserved),
             reorder_at=inv.reorder_at,
         )
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except (ValueError, StockPermissionError) as e:
+        raise _stock_change_refused(e)
 
 
 @router.post("/inventory/reserve", response_model=ReservationResponse)
@@ -500,9 +522,82 @@ def transfer_stock(
             qty=payload.qty,
             note=payload.note,
             created_by=ctx.user_id,
+            reference=payload.reference,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Stock Movements
+# ---------------------------------------------------------------------------
+
+@router.post("/inventory/movements", response_model=RecordMovementResponse)
+def record_stock_movement(
+    payload: RecordMovementRequest,
+    ctx: CatalogContext = Depends(get_catalog_writer_context),
+    service: ProductService = Depends(get_service),
+):
+    """Record what happened to stock: received, sold, shipped, damaged, lost, returned, or a
+    count correction (owners and admins only, with a note)."""
+    try:
+        return service.record_movement(
+            ctx.tenant_id,
+            payload,
+            created_by=ctx.user_id,
+            can_correct=ctx.is_admin,
+        )
+    except (ValueError, StockPermissionError) as e:
+        raise _stock_change_refused(e)
+
+
+@router.get("/inventory/movements", response_model=StockMovementHistoryResponse)
+def list_stock_movements(
+    variant_id: Optional[UUID] = None,
+    location_id: Optional[UUID] = None,
+    reason: Optional[List[str]] = Query(None, description="Ledger reasons to include, e.g. SALE"),
+    date_from: Optional[datetime] = Query(None, description="Inclusive"),
+    date_to: Optional[datetime] = Query(None, description="Exclusive"),
+    include_holds: bool = Query(False, description="Include reservation holds (RESERVE, RELEASE)"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    ctx: CatalogContext = Depends(get_catalog_context),
+    service: ProductService = Depends(get_service),
+):
+    """Stock movement history, newest first, by product, location, reason and date."""
+    try:
+        return service.list_movements(
+            ctx.tenant_id,
+            variant_id=variant_id,
+            location_id=location_id,
+            reasons=reason,
+            date_from=date_from,
+            date_to=date_to,
+            include_holds=include_holds,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get("/inventory/movements/summary", response_model=StockMovementSummaryResponse)
+def summarize_stock_movements(
+    variant_id: Optional[UUID] = None,
+    location_id: Optional[UUID] = None,
+    date_from: Optional[datetime] = Query(None, description="Inclusive"),
+    date_to: Optional[datetime] = Query(None, description="Exclusive"),
+    ctx: CatalogContext = Depends(get_catalog_context),
+    service: ProductService = Depends(get_service),
+):
+    """Per-location totals received, sold, shipped, damaged, lost, returned and corrected."""
+    return service.movement_summary(
+        ctx.tenant_id,
+        variant_id=variant_id,
+        location_id=location_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -688,6 +783,7 @@ async def commit_import_job(
         csv_content=csv_text,
         skip_invalid=skip_invalid,
         auto_create_categories=auto_create_categories,
+        can_correct=ctx.is_admin,
     )
     await catalog_import_worker.enqueue(job.job_id)
 
