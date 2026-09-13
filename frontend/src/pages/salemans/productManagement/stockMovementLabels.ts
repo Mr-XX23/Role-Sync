@@ -18,6 +18,7 @@ import type {
   Variant,
 } from '../../../api/catalogApi';
 
+// Same labels as the inventory matrix and transfer screens.
 export const formatLocationType = (type?: string | null): string => {
   switch (type?.toUpperCase()) {
     case 'WAREHOUSE':
@@ -27,9 +28,9 @@ export const formatLocationType = (type?: string | null): string => {
     case 'SUPPLIER':
       return 'Supplier';
     case 'IN_TRANSIT':
-      return 'In transit';
+      return 'In Transit';
     default:
-      return type ? type.replace(/_/g, ' ').toLowerCase() : 'Location';
+      return type ? type.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'Location';
   }
 };
 

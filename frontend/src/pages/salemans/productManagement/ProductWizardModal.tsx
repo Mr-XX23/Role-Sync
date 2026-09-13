@@ -1436,7 +1436,7 @@ export const ProductWizardModal: React.FC<ProductWizardModalProps> = ({
                           SKU *
                         </th>
                         <th className="px-4 py-3">
-                          Price (USD) *
+                          Price *
                         </th>
                         <th className="px-4 py-3">
                           Barcode
@@ -1665,7 +1665,7 @@ export const ProductWizardModal: React.FC<ProductWizardModalProps> = ({
                           >
                             <div className="font-bold text-foreground text-xs">{loc.name}</div>
                             <div className="text-[10px] text-muted-foreground uppercase font-normal font-mono mt-0.5">
-                              {loc.type}
+                              {loc.type?.replace(/_/g, ' ')}
                             </div>
                           </th>
                         ))}
