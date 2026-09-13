@@ -25,12 +25,13 @@ import { Profile } from './pages/salemans/Profile';
 import { ProductManagement } from './pages/salemans/productManagement/ProductManagement';
 import { SalesAgent } from './pages/salemans/salesAgent/SalesAgent';
 import { Deals } from './pages/salemans/deals/Deals';
+import { LandingPage } from './pages/marketing/LandingPage';
+
+/** Public marketing site: one scrolling page, each route scrolls to its section. */
+const MARKETING_PATHS = ['/', '/home', '/features', '/how-it-works', '/integrations', '/security', '/about', '/contact'];
 
 export const router = createBrowserRouter([
-  {
-    path: '/',
-    element: <Navigate to="/select-role" replace />,
-  },
+  ...MARKETING_PATHS.map((path) => ({ path, element: <LandingPage /> })),
   {
     path: '/signin',
     element: (
