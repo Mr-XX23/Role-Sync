@@ -11,7 +11,7 @@ import type { KnowledgeDocument } from '../../../api/knowledgeVaultApi';
 
 export const DOCUMENT_EXTENSIONS = ['pdf', 'docx', 'pptx', 'xlsx', 'csv', 'tsv', 'txt', 'md', 'json', 'yaml', 'yml'];
 export const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
-export const MAX_ATTACHMENTS = 5;
+export const MAX_ATTACHMENTS = 2;
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024; // matches MAX_UPLOAD_BYTES in the pipeline
 
 /** Value for `<input accept>`: documents and images only (no audio/video or anything else). */

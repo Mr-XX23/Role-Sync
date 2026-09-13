@@ -16,6 +16,11 @@ import { ATTACHMENT_ACCEPT, MAX_ATTACHMENTS, formatBytes, toAttachment } from '.
 
 export type ComposerPhase = 'idle' | 'uploading' | 'indexing' | 'sending';
 
+/** What the rep can type in one message; the engine accepts this plus the note naming attached files. */
+const MAX_MESSAGE_CHARS = 100_000;
+/** Show the character count once the message gets this close to the limit. */
+const COUNTER_FROM = 90_000;
+
 /** Prompt starters for the chips under the input. `{…}` parts are for the rep to fill in. */
 const QUICK_ACTIONS: { label: string; icon: React.FC<{ className?: string }>; template: string }[] = [
   {
@@ -91,6 +96,7 @@ export const Composer: React.FC<ComposerProps> = ({
   const working = phase !== 'idle';
   const disabled = blocked || working;
   const canSend = !disabled && (value.trim().length > 0 || attachments.length > 0);
+  const attachmentsFull = attachments.length >= MAX_ATTACHMENTS;
 
   // Grow with the text, up to a comfortable height, then scroll.
   useEffect(() => {
@@ -160,7 +166,7 @@ export const Composer: React.FC<ComposerProps> = ({
   const placeholder =
     blocked && blockedReason ? blockedReason : variant === 'hero' ? 'What do you want to know or get done?' : 'Reply or ask for something else…';
 
-  return (
+  const box = (
     <div
       className={`relative rounded-2xl border bg-card shadow-lg transition-all duration-200 ${
         dragging
@@ -238,7 +244,8 @@ export const Composer: React.FC<ComposerProps> = ({
         rows={variant === 'hero' ? 3 : 1}
         disabled={disabled}
         placeholder={placeholder}
-        onChange={(event) => onChange(event.target.value)}
+        maxLength={MAX_MESSAGE_CHARS}
+        onChange={(event) => onChange(event.target.value.slice(0, MAX_MESSAGE_CHARS))}
         onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
@@ -250,6 +257,13 @@ export const Composer: React.FC<ComposerProps> = ({
           if (files.length && !disabled) {
             event.preventDefault();
             addFiles(files);
+            return;
+          }
+          // The browser cuts a paste off at the limit; say so rather than dropping text silently.
+          const field = event.currentTarget;
+          const room = MAX_MESSAGE_CHARS - (field.value.length - (field.selectionEnd - field.selectionStart));
+          if (event.clipboardData.getData('text').length > room) {
+            onReject(`A message can be up to ${MAX_MESSAGE_CHARS.toLocaleString()} characters, so the end of what you pasted was cut off.`);
           }
         }}
         className={`block w-full resize-none bg-transparent px-4 text-sm text-foreground placeholder:text-muted-foreground/70 outline-none border-0 focus:ring-0 disabled:cursor-not-allowed leading-relaxed ${
@@ -273,66 +287,27 @@ export const Composer: React.FC<ComposerProps> = ({
           />
           <button
             type="button"
-            title="Attach documents or images"
+            title={attachmentsFull ? `You can attach up to ${MAX_ATTACHMENTS} files per message` : 'Attach documents or images'}
             aria-label="Attach documents or images"
-            disabled={disabled}
+            disabled={disabled || attachmentsFull}
             onClick={() => fileInputRef.current?.click()}
             className="w-9 h-9 rounded-full border border-border/80 bg-background text-muted-foreground hover:text-foreground hover:border-foreground/30 flex items-center justify-center transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 shrink-0"
           >
             <Paperclip className="w-4 h-4" />
           </button>
-
-          {variant === 'hero' && (
-            <>
-              {QUICK_ACTIONS.map((action, index) => {
-                const Icon = action.icon;
-                return (
-                  <button
-                    key={action.label}
-                    type="button"
-                    disabled={disabled}
-                    onClick={() => insertTemplate(action.template)}
-                    className={`${index === 2 ? 'hidden md:inline-flex' : 'hidden sm:inline-flex'} items-center gap-1.5 rounded-full border border-border/80 bg-background px-3 py-1.5 text-xs font-semibold text-foreground/80 hover:text-foreground hover:border-foreground/30 hover:bg-muted/60 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50`}
-                  >
-                    <Icon className="w-3.5 h-3.5" />
-                    {action.label}
-                  </button>
-                );
-              })}
-              <div ref={moreRef} className="relative">
-                <button
-                  type="button"
-                  disabled={disabled}
-                  aria-expanded={moreOpen}
-                  onClick={() => setMoreOpen((open) => !open)}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-border/80 bg-background px-3 py-1.5 text-xs font-semibold text-foreground/80 hover:text-foreground hover:border-foreground/30 hover:bg-muted/60 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <LayoutGrid className="w-3.5 h-3.5" />
-                  More
-                </button>
-                {moreOpen && (
-                  <div className="absolute left-0 bottom-full mb-2 w-[22rem] max-w-[80vw] rounded-xl border border-border bg-popover shadow-xl p-1.5 z-20 animate-in fade-in duration-150">
-                    <p className="px-2.5 pt-1.5 pb-1 font-mono text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
-                      Try asking
-                    </p>
-                    {SUGGESTIONS.map((suggestion) => (
-                      <button
-                        key={suggestion}
-                        type="button"
-                        onClick={() => insertTemplate(suggestion)}
-                        className="block w-full text-left rounded-lg px-2.5 py-2 text-xs text-foreground hover:bg-muted transition-colors cursor-pointer leading-snug"
-                      >
-                        {suggestion}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </>
-          )}
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {value.length >= COUNTER_FROM && (
+            <span
+              className={`font-mono text-[11px] tabular-nums ${
+                value.length >= MAX_MESSAGE_CHARS ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'
+              }`}
+              title={`A message can be up to ${MAX_MESSAGE_CHARS.toLocaleString()} characters`}
+            >
+              {value.length.toLocaleString()} / {MAX_MESSAGE_CHARS.toLocaleString()}
+            </span>
+          )}
           {working && (
             <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -342,7 +317,7 @@ export const Composer: React.FC<ComposerProps> = ({
           {!working && attachments.length > 0 && (
             <span className="hidden sm:inline-flex items-center gap-1 text-[11px] text-muted-foreground">
               <ImageIcon className="w-3.5 h-3.5" />
-              {attachments.length} attached
+              {attachments.length} of {MAX_ATTACHMENTS} attached
             </span>
           )}
           <button
@@ -355,6 +330,67 @@ export const Composer: React.FC<ComposerProps> = ({
           >
             {working ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowUp className="w-4 h-4" />}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (variant !== 'hero') {
+    return box;
+  }
+
+  const chipClass =
+    'inline-flex items-center gap-1.5 rounded-full border border-border/80 bg-card px-3 py-1.5 text-xs font-semibold text-foreground/80 hover:text-foreground hover:border-foreground/30 hover:bg-muted/60 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50';
+
+  return (
+    <div className="space-y-3">
+      {box}
+
+      {/* Prompt starters, under the input */}
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        {QUICK_ACTIONS.map((action) => {
+          const Icon = action.icon;
+          return (
+            <button
+              key={action.label}
+              type="button"
+              disabled={disabled}
+              onClick={() => insertTemplate(action.template)}
+              className={chipClass}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {action.label}
+            </button>
+          );
+        })}
+        <div ref={moreRef} className="relative">
+          <button
+            type="button"
+            disabled={disabled}
+            aria-expanded={moreOpen}
+            onClick={() => setMoreOpen((open) => !open)}
+            className={chipClass}
+          >
+            <LayoutGrid className="w-3.5 h-3.5" />
+            More
+          </button>
+          {moreOpen && (
+            <div className="absolute right-0 top-full mt-2 w-[22rem] max-w-[80vw] rounded-xl border border-border bg-popover shadow-xl p-1.5 z-20 animate-in fade-in duration-150">
+              <p className="px-2.5 pt-1.5 pb-1 font-mono text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
+                Try asking
+              </p>
+              {SUGGESTIONS.map((suggestion) => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  onClick={() => insertTemplate(suggestion)}
+                  className="block w-full text-left rounded-lg px-2.5 py-2 text-xs text-foreground hover:bg-muted transition-colors cursor-pointer leading-snug"
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
