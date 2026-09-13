@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -384,6 +384,7 @@ class TransferStockRequest(BaseModel):
     to_location_id: UUID
     qty: int = Field(..., gt=0)
     note: Optional[str] = None
+    reference: Optional[str] = Field(None, max_length=255)
 
 
 class TransferStockResponse(BaseModel):
@@ -419,6 +420,111 @@ class StockMovementResponse(BaseModel):
     created_by: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------------------
+# Stock Movements (what happened to stock, and the history of it)
+# ---------------------------------------------------------------------------
+
+MAX_MOVEMENT_QTY = 1_000_000_000
+
+StockMovementType = Literal["RECEIVED", "SOLD", "SHIPPED", "DAMAGED", "LOST", "RETURNED", "COUNT_CORRECTION"]
+
+
+class RecordMovementRequest(BaseModel):
+    """One thing that happened to stock at a location; the rules are in catalog.stock_movements."""
+
+    type: StockMovementType
+    variant_id: UUID
+    location_id: UUID = Field(..., description="Where it happened; for SHIPPED, where the stock leaves")
+    qty: int = Field(..., ge=0, le=MAX_MOVEMENT_QTY, description="Units; for COUNT_CORRECTION, the counted quantity")
+    to_location_id: Optional[UUID] = Field(None, description="SHIPPED: where the stock arrives")
+    resellable: bool = Field(True, description="RETURNED: whether the returned units can be sold again")
+    expected_on_hand: Optional[int] = Field(
+        None, ge=0, description="COUNT_CORRECTION: the on-hand figure the person was looking at"
+    )
+    counterparty: Optional[str] = Field(None, max_length=255, description="Customer or supplier")
+    reference: Optional[str] = Field(None, max_length=255, description="Order, invoice, PO or return number")
+    note: Optional[str] = Field(None, max_length=1000)
+
+
+class StockLevelChange(BaseModel):
+    location_id: UUID
+    location_name: str
+    qty_on_hand_before: int
+    qty_on_hand: int
+    qty_reserved: int
+    qty_available: int
+
+
+class StockMovementEntry(BaseModel):
+    id: UUID
+    at: datetime
+    type: str  # RECEIVED, SOLD, SHIPPED_OUT, SHIPPED_IN, DAMAGED, LOST, RETURNED, CORRECTION, RESERVED, RELEASED
+    reason: str  # the ledger reason
+    delta: int
+    on_hand_after: Optional[int] = None
+    variant_id: UUID
+    sku: str
+    product_id: UUID
+    product_name: str
+    variant_label: Optional[str] = None
+    location_id: UUID
+    location_name: str
+    other_location_id: Optional[UUID] = None  # the other end of a shipment
+    other_location_name: Optional[str] = None
+    counterparty: Optional[str] = None
+    reference: Optional[str] = None
+    note: Optional[str] = None
+    ref_id: Optional[UUID] = None
+    created_by: Optional[str] = None
+
+
+class RecordMovementResponse(BaseModel):
+    type: StockMovementType
+    ref_id: UUID
+    changed: bool
+    levels: List[StockLevelChange]
+    movements: List[StockMovementEntry]
+
+
+class StockMovementHistoryResponse(BaseModel):
+    items: List[StockMovementEntry]
+    total: int
+    limit: int
+    offset: int
+
+
+class StockMovementTotals(BaseModel):
+    received: int = 0
+    sold: int = 0
+    shipped_out: int = 0
+    shipped_in: int = 0
+    damaged: int = 0
+    lost: int = 0
+    returned: int = 0
+    corrected_up: int = 0
+    corrected_down: int = 0
+    net_change: int = 0
+    movements: int = 0
+
+
+class LocationStockSummary(StockMovementTotals):
+    location_id: UUID
+    location_name: str
+    location_type: str
+    sellable: bool
+    qty_on_hand: int = 0
+    qty_reserved: int = 0
+    qty_available: int = 0
+
+
+class StockMovementSummaryResponse(BaseModel):
+    variant_id: Optional[UUID] = None
+    date_from: Optional[datetime] = None
+    date_to: Optional[datetime] = None
+    locations: List[LocationStockSummary]
+    totals: StockMovementTotals
 
 
 # ---------------------------------------------------------------------------
