@@ -52,6 +52,14 @@ public class GlobalExceptionsHandler {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
     }
 
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<Map<String, String>> handleConflict(ConflictException ex) {
+        Map<String, String> error = new HashMap<>();
+        error.put("message", ex.getMessage());
+        error.put("status", "409");
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<Map<String, String>> handleValidationExceptions(MethodArgumentNotValidException ex) {
         Map<String, String> errors = new HashMap<>();
@@ -60,6 +68,9 @@ public class GlobalExceptionsHandler {
             String errorMessage = error.getDefaultMessage();
             errors.put(fieldName, errorMessage);
         });
+        // Clients show "message"; give them the first problem as well as the per-field map.
+        ex.getBindingResult().getAllErrors().stream().findFirst()
+                .ifPresent(first -> errors.putIfAbsent("message", first.getDefaultMessage()));
         errors.put("status", "400");
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errors);
     }

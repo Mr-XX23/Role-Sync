@@ -109,4 +109,28 @@ public class AuthUserCredentials {
     private LocalDateTime updatedAt;
 
     private LocalDateTime lastLoginAt;
+
+    /**
+     * Set while the account's password is a temporary one emailed by a workspace admin: the user
+     * must choose their own before using the app. Nullable because rows created before this
+     * column existed have no value; null means false.
+     */
+    @Column(name = "must_change_password")
+    private Boolean mustChangePassword;
+
+    /** When the emailed temporary password stops working for sign-in (null: no temporary password). */
+    @Column(name = "temp_password_expires_at")
+    private LocalDateTime temporaryPasswordExpiresAt;
+
+    /** The auth user id of the workspace admin who created this account (null: the user signed up). */
+    @Column(name = "provisioned_by")
+    private UUID provisionedBy;
+
+    public boolean requiresPasswordChange() {
+        return Boolean.TRUE.equals(mustChangePassword);
+    }
+
+    public boolean temporaryPasswordExpired(LocalDateTime now) {
+        return requiresPasswordChange() && temporaryPasswordExpiresAt != null && !now.isBefore(temporaryPasswordExpiresAt);
+    }
 }

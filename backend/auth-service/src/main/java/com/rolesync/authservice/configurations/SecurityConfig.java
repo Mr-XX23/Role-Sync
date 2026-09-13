@@ -40,6 +40,10 @@ public class SecurityConfig {
         @Value("${spring.profiles.active:dev}")
         private String activeProfile;
 
+        /** Shared secret for the service-to-service API under /internal/ (see InternalApiTokenFilter). */
+        @Value("${internal.service-token:}")
+        private String internalServiceToken;
+
         @PostConstruct
         public void logSecurityConfig() {
                 log.info("Security Configuration Initialized:");
@@ -83,7 +87,7 @@ public class SecurityConfig {
                                         // Ignore CSRF for API endpoints using JWT bearer tokens (not vulnerable to
                                         // CSRF)
                                         .ignoringRequestMatchers("/api/v1/auth/login", "/api/v1/auth/register",
-                                                        "/api/v1/auth/health/**"));
+                                                        "/api/v1/auth/health/**", "/internal/**"));
 
                         log.info("CSRF protection configured with cookie-based tokens");
                 } else {
@@ -97,6 +101,8 @@ public class SecurityConfig {
                                 .exceptionHandling(exceptions -> exceptions
                                                 .authenticationEntryPoint(new org.springframework.security.web.authentication.HttpStatusEntryPoint(org.springframework.http.HttpStatus.UNAUTHORIZED)))
                                 .authorizeHttpRequests(auth -> auth
+                                                // Service-to-service calls carry no user session; InternalApiTokenFilter checks them.
+                                                .requestMatchers("/internal/**").permitAll()
                                                 .requestMatchers(publicEndpointsConfig.getPublicEndpoints()).permitAll()
                                                 .anyRequest().authenticated())
                                 .oauth2Login(oauth2 -> oauth2
@@ -105,6 +111,8 @@ public class SecurityConfig {
                                                 .successHandler(oauth2SuccessHandler)
                                                 .failureUrl("/login?error=oauth_failed"))
                                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.decoder(jwtDecoder)))
+                                .addFilterBefore(new InternalApiTokenFilter(internalServiceToken),
+                                                UsernamePasswordAuthenticationFilter.class)
                                 .addFilterBefore(
                                                 new JwtAuthenticationFilter(jwtService, tokenService,
                                                                 publicEndpointsConfig.getPublicEndpoints()),

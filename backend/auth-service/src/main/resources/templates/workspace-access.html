@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>You've been added to a workspace</title>
+</head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+<div style="background-color: #f4f4f4; padding: 20px; border-radius: 5px;">
+    <h2 style="color: #2c3e50;">
+        You've been added to <span th:text="${workspaceName}">a workspace</span>
+    </h2>
+    <p>Hi <strong th:text="${recipientName}">there</strong>,</p>
+    <p>
+        <strong th:text="${invitedByName}">A workspace admin</strong> added you to
+        <strong th:text="${workspaceName}">a workspace</strong> on <span th:text="${appName}">RoleSync</span>
+        as <strong th:text="${roleName}">Member</strong>.
+    </p>
+    <p>
+        Sign in with your existing account. If you belong to more than one workspace, switch between them from
+        the workspace menu at the top of the app.
+    </p>
+    <div style="text-align: center; margin: 30px 0;">
+        <a th:href="${signInLink}"
+           style="background-color: #3498db; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
+            Sign in
+        </a>
+    </div>
+    <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
+    <p style="color: #7f8c8d; font-size: 12px;">
+        If the button doesn't work, copy and paste this link into your browser:<br>
+        <a th:href="${signInLink}" th:text="${signInLink}"></a>
+    </p>
+    <p style="color: #7f8c8d; font-size: 12px;">
+        If you weren't expecting this, contact the person who added you.
+    </p>
+</div>
+</body>
+</html>
