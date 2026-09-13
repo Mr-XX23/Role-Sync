@@ -114,6 +114,22 @@ class CalendarStore:
                 except Exception as err:
                     print(f"[CalendarStore] Mongo update error: {err}")
 
+    def get_connection_by_id(self, connection_id: str) -> CalendarConnection | None:
+        with self._lock:
+            conn = self._connections.get(connection_id)
+            if conn:
+                return conn
+            if self._db is not None:
+                try:
+                    doc = self._db.calendar_connections.find_one({"connection_id": connection_id})
+                    if doc:
+                        conn = self._doc_to_connection(doc)
+                        self._connections[connection_id] = conn
+                        return conn
+                except Exception as err:
+                    print(f"[CalendarStore] Mongo get_connection_by_id error: {err}")
+            return None
+
     def acquire_lock(self, connection_id: str, job_id: str, lease_seconds: int = 900) -> bool:
         success = self._lock_manager.acquire_lock("calendar_connections", connection_id, job_id, lease_seconds)
         if success:
