@@ -32,6 +32,26 @@ UNSWEEPABLE_REASON = (
 )
 
 
+# events.list allows up to 2500 events per page. With attendee lists trimmed to a
+# single entry, a full page fits the Composio response limit for a real calendar
+# (verified live). A calendar with unusually heavy events can still exceed it, so a
+# too-large response halves the page and retries rather than failing the sweep.
+_CALENDAR_PAGE_SIZE = 2500
+_CALENDAR_MIN_PAGE_SIZE = 50
+
+
+def _payload_too_large(error: Optional[str]) -> bool:
+    """Composio rejects an oversized tool response with 413 Upstream_PayloadTooLarge.
+
+    Matches the error code phrase, not a bare "413", which could appear by chance
+    inside a request id.
+    """
+    if not error:
+        return False
+    text = error.lower()
+    return "payloadtoolarge" in text or "error code: 413" in text
+
+
 def _max_pages() -> int:
     try:
         return max(1, int(os.environ.get("RECONCILIATION_MAX_PAGES", "10")))
@@ -58,9 +78,13 @@ class LiveSourceLister:
 
     def __init__(self, composio_client: Any) -> None:
         self.composio = composio_client
+        # Message from the most recent failed call, so a caller can tell a response
+        # that was merely too large (retry smaller) from a genuine failure.
+        self._last_error: Optional[str] = None
 
     # ---- helpers ---------------------------------------------------------
     def _execute(self, slug: str, arguments: dict[str, Any], user_id: str) -> Optional[dict[str, Any]]:
+        self._last_error = None
         try:
             res = self.composio._composio.tools.execute(
                 slug=slug,
@@ -71,6 +95,7 @@ class LiveSourceLister:
             data = res.get("data", {}) if isinstance(res, dict) else getattr(res, "data", {})
             return data if isinstance(data, dict) else None
         except Exception as err:
+            self._last_error = str(err)
             print(f"[LiveSourceLister] {slug} failed for user_id={user_id}: {err}")
             return None
 
@@ -155,20 +180,52 @@ class LiveSourceLister:
         return LiveListing(source="notion", items=items, complete=True)
 
     def _list_calendar(self, user_id: str) -> LiveListing:
-        for slug in ("GOOGLECALENDAR_LIST_EVENTS", "GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_FIND_EVENT"):
-            data = self._execute(slug, {"maxResults": 250, "singleEvents": True}, user_id)
-            if data is None:
-                continue
-            events = self._unwrap(data, "items", "events")
-            items = [
-                {"external_id": str(entry["id"])}
-                for entry in events
-                if isinstance(entry, dict) and entry.get("id")
-            ]
-            nested = data.get("data") if isinstance(data.get("data"), dict) else {}
-            next_token = data.get("nextPageToken") or (nested.get("nextPageToken") if nested else None)
-            if next_token:
-                return LiveListing(source="google_calendar", items=items, complete=False, reason="listing truncated")
-            return LiveListing(source="google_calendar", items=items, complete=True)
+        # GOOGLECALENDAR_EVENTS_LIST (Google events.list) is the only listing tool
+        # Composio publishes for calendar, and there is deliberately no fallback:
+        #   - GOOGLECALENDAR_LIST_EVENTS does not exist; trying it first 404ed on
+        #     every sweep before the real tool ran.
+        #   - GOOGLECALENDAR_FIND_EVENT nests results under "event_data", which
+        #     _unwrap cannot read. Falling back to it yields an EMPTY listing that can
+        #     look complete - exactly the weak evidence a sweep must never delete on.
+        # A failed call therefore returns an incomplete listing, which deletes nothing.
+        #
+        # This paginates like _list_gdrive. It used to stop after one page of 250, so
+        # any calendar larger than that was always "incomplete" and reconciliation
+        # never removed a deleted event. singleEvents expands every recurring meeting
+        # across all time, so real calendars run to thousands of instances.
+        items: list[dict[str, Any]] = []
+        page_token: Optional[str] = None
+        page_size = _CALENDAR_PAGE_SIZE
+        pages = 0
+        while pages < _max_pages():
+            args: dict[str, Any] = {
+                "maxResults": page_size,
+                # Expand recurring events into instances, matching how they are indexed.
+                "singleEvents": True,
+                # Only event ids are needed. Attendee lists are what push a full page
+                # past the Composio response limit, so trim them to one entry.
+                "maxAttendees": 1,
+            }
+            if page_token:
+                args["pageToken"] = page_token
 
-        return LiveListing(source="google_calendar", complete=False, reason="listing call failed")
+            data = self._execute("GOOGLECALENDAR_EVENTS_LIST", args, user_id)
+            if data is None:
+                # An oversized response says nothing is wrong with the calendar: retry
+                # the same page smaller. The size only ever shrinks, which bounds this.
+                if _payload_too_large(self._last_error) and page_size > _CALENDAR_MIN_PAGE_SIZE:
+                    page_size = max(_CALENDAR_MIN_PAGE_SIZE, page_size // 2)
+                    continue
+                return LiveListing(source="google_calendar", complete=False, reason="listing call failed")
+
+            pages += 1
+            for entry in self._unwrap(data, "items", "events"):
+                if isinstance(entry, dict) and entry.get("id"):
+                    items.append({"external_id": str(entry["id"])})
+
+            nested = data.get("data") if isinstance(data.get("data"), dict) else {}
+            page_token = data.get("nextPageToken") or (nested.get("nextPageToken") if nested else None)
+            if not page_token:
+                return LiveListing(source="google_calendar", items=items, complete=True)
+
+        return LiveListing(source="google_calendar", items=items, complete=False, reason="listing truncated at page cap")

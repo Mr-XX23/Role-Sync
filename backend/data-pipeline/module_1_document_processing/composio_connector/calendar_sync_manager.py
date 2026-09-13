@@ -710,7 +710,10 @@ class CalendarSyncManager:
             args["pageToken"] = page_token
 
         # Try Composio Google Calendar tools
-        tool_slugs = ["GOOGLECALENDAR_FIND_EVENT", "GOOGLECALENDAR_LIST_EVENTS", "GOOGLE_CALENDAR_LIST_EVENTS"]
+        # Only tools Composio actually publishes. GOOGLECALENDAR_LIST_EVENTS and
+        # GOOGLE_CALENDAR_LIST_EVENTS do not exist and 404ed whenever FIND_EVENT failed.
+        # EVENTS_LIST returns a top-level "items" list, which the parser below reads.
+        tool_slugs = ["GOOGLECALENDAR_FIND_EVENT", "GOOGLECALENDAR_EVENTS_LIST"]
         for slug in tool_slugs:
             try:
                 res = self.composio._composio.tools.execute(
