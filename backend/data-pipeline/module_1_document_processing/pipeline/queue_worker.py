@@ -1,7 +1,7 @@
 import asyncio
 import inspect
 import os
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent, EventType
 from module_1_document_processing.security.security_scanner import SecurityScanner, ScanResult
 from module_1_document_processing.pipeline.canonical_store import CanonicalStore

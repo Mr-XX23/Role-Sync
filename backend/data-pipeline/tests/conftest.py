@@ -21,6 +21,40 @@ os.environ.setdefault("GATEKEEPER_SEMANTIC_ENABLED", "false")
 os.environ.setdefault("INGEST_QUEUE_BACKEND", "memory")
 
 
+# Test runs must never write into the developer's live services. They did: the
+# catalog suites' default database URL is localhost:5432, the published port of
+# the real catalog database, so every run left dozens of random-UUID tenants in it
+# (1,724 had accumulated). Run inside the container, the suite also wrote test
+# documents into the live MongoDB and uploaded fixtures to MinIO, and on the host
+# every upload test staged files into the repository's storage/ folder.
+#
+# Set ROLESYNC_TESTS_USE_LIVE_SERVICES=1 to opt out deliberately.
+if os.environ.get("ROLESYNC_TESTS_USE_LIVE_SERVICES", "").strip().lower() not in {"1", "true", "yes", "on"}:
+    import atexit
+    import shutil
+    import tempfile
+
+    _live_catalog = os.environ.get(
+        "CATALOG_DATABASE_URL", "postgresql://postgres:root@localhost:5432/rolesync-micro-catalog"
+    )
+    _base, _, _db = _live_catalog.rpartition("/")
+    _db_name = _db.split("?", 1)[0]
+    if _db_name and not _db_name.endswith("-test"):
+        # Same server and credentials, separate database; catalog.database creates
+        # it on first use.
+        os.environ["CATALOG_DATABASE_URL"] = f"{_base}/{_db_name}-test"
+
+    # Nothing listens here, so every Mongo-backed store falls back to memory, as it
+    # already does on the host, where the compose hostname does not resolve.
+    os.environ["MONGODB_URI"] = "mongodb://127.0.0.1:1"
+
+    # Staged upload bytes go to a throwaway directory, not MinIO or the repo.
+    os.environ["RAW_STORE_BACKEND"] = "local"
+    _vault_dir = tempfile.mkdtemp(prefix="rolesync-test-vault-")
+    os.environ["VAULT_STORAGE_DIR"] = _vault_dir
+    atexit.register(shutil.rmtree, _vault_dir, True)
+
+
 import pytest
 
 

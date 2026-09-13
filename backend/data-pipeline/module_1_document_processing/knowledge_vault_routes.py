@@ -37,7 +37,6 @@ from module_1_document_processing.pipeline.job_payloads import (
 from module_1_document_processing.pipeline import ingestion_guards as guards
 from module_1_document_processing.pipeline.canonical_store import CanonicalStore
 from module_1_document_processing.parsing.media_queue import MEDIA_PENDING
-from module_3_batch_ingestion_vector.chunker import HierarchicalChunker
 from module_3_batch_ingestion_vector.delta_checker import VersionedHashDB
 from module_3_batch_ingestion_vector.embedding_worker import EmbeddingWorker
 from module_3_batch_ingestion_vector.vector_store import VectorStore

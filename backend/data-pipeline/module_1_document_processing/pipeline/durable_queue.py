@@ -44,7 +44,6 @@ DEFAULT_HEARTBEAT_SECONDS = 60
 # 0 disables the limit. Above this many waiting jobs the service stops
 # accepting new ingestion instead of promising work it cannot get to.
 DEFAULT_MAX_DEPTH = 0
-_TRUTHY = {"1", "true", "yes", "on"}
 
 
 def _env_int(name: str, default: int) -> int:
