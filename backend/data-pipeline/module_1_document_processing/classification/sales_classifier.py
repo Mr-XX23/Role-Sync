@@ -30,6 +30,60 @@ DEFAULT_REGION_STRIDE_CHARS = 6000         # ~one region per this many chars, be
 
 _SAMPLE_SEPARATOR = "\n\n[...]\n\n"
 
+_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# What a single classification request concluded, when it did not produce a result.
+_RETRY = "retry"          # worth asking again (the free router may pick another model)
+_NEXT_MODEL = "next"      # this model cannot serve the request; move on
+_STOP = "stop"            # no model will succeed (daily limit, bad key): use the heuristic
+
+
+def classification_response_schema() -> dict[str, Any]:
+    """The JSON schema every classification reply must satisfy.
+
+    Sent as an enforced response format, so the reply is guaranteed to be valid
+    JSON with a known category. Free models used to answer in prose, run out of
+    tokens mid-object, or wrap JSON in markdown; each of those was silently
+    discarded and the document fell through to the keyword rules.
+    """
+    return {
+        "name": "sales_classification",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "category", "target_competitor", "target_industry",
+                "sales_summary", "sales_tags", "confidence_score",
+            ],
+            "properties": {
+                "category": {"type": "string", "enum": sorted(VALID_SALES_CATEGORIES)},
+                "target_competitor": {"type": ["string", "null"]},
+                "target_industry": {"type": ["string", "null"]},
+                "sales_summary": {"type": "string"},
+                "sales_tags": {"type": "array", "items": {"type": "string"}},
+                "confidence_score": {"type": "number"},
+            },
+        },
+    }
+
+
+def _parse_json_object(content: str) -> Optional[dict[str, Any]]:
+    """Extract the JSON object from a reply, tolerating reasoning tags and fences."""
+    text = re.sub(r"<think>.*?</think>", "", content or "", flags=re.DOTALL).strip()
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group(0))
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _env_models(name: str) -> list[str]:
+    return [m.strip() for m in os.environ.get(name, "").split(",") if m.strip()]
+
 
 def _env_int(name: str, default: int) -> int:
     try:
@@ -121,8 +175,9 @@ class SalesClassificationResult(BaseModel):
 class SalesClassifier:
     """
     Intelligent Sales Document Classifier for the RoleSync Knowledge Vault.
-    Uses OpenRouter API (supporting free models e.g. Llama-3.3-70B, Gemini-2.0-Flash)
-    with an immediate, resilient heuristic rule engine fallback.
+    Uses OpenRouter - by default the openrouter/free router, which picks an available
+    free model per request - with an enforced JSON schema, and falls back to a
+    deterministic keyword rule engine when no model can classify.
     """
 
     KNOWN_COMPETITORS = [
@@ -147,7 +202,16 @@ class SalesClassifier:
             or os.environ.get("OPENROUTER_API")
             or ""
         ).strip()
-        self.model_name = os.environ.get("OPENROUTER_MODEL", "google/gemma-4-31b-it:free").strip()
+        # openrouter/free picks an available free model per request, filtered to
+        # models that support what the request requires (see _request_classification).
+        self.model_name = os.environ.get("OPENROUTER_MODEL", "openrouter/free").strip() or "openrouter/free"
+        # Optional extra models to try, in order, if the primary cannot classify.
+        self.fallback_models = _env_models("OPENROUTER_FALLBACK_MODELS")
+        self.attempts_per_model = _env_int("CLASSIFIER_ATTEMPTS_PER_MODEL", 2)
+        self.request_timeout = _env_int("CLASSIFIER_TIMEOUT_SECONDS", 25)
+        # Room to finish: reasoning models used to spend a 400-token budget thinking
+        # and get cut off before writing the JSON.
+        self.max_output_tokens = _env_int("CLASSIFIER_MAX_OUTPUT_TOKENS", 1024)
         self.site_url = os.environ.get("OPENROUTER_SITE_URL", "https://rolesync.ai")
         self.site_name = os.environ.get("OPENROUTER_SITE_NAME", "RoleSync Enterprise AI")
 
@@ -183,6 +247,29 @@ class SalesClassifier:
 
         # Run AI classification if API key is present, otherwise fallback to heuristics
         result = self._classify_with_ai_or_heuristic(filename, mime_type, text_content)
+        if user_override_competitor:
+            result.target_competitor = user_override_competitor
+        return result
+
+    def classify_preliminary(
+        self,
+        filename: str,
+        text_content: str = "",
+        user_override_category: Optional[str] = None,
+        user_override_competitor: Optional[str] = None,
+    ) -> SalesClassificationResult:
+        """An instant placeholder label shown while a document is still processing.
+
+        Uses only the keyword rules. The upload request used to run the full model
+        classification on the filename alone - which tells a model almost nothing,
+        held the request for many seconds, and spent a request from a shared daily
+        allowance before the real classification spent another. The document is
+        classified properly, once, after it has been parsed.
+        """
+        result = self._heuristic_classification(filename, text_content or filename)
+        if user_override_category and user_override_category.upper() in VALID_SALES_CATEGORIES:
+            result.category = user_override_category.upper()
+            result.confidence_score = 1.0
         if user_override_competitor:
             result.target_competitor = user_override_competitor
         return result
@@ -246,15 +333,13 @@ class SalesClassifier:
             "- PRODUCT_SPEC: Technical specs, API docs, system architecture, feature deep-dives, developer guides.\n"
             "- CONTRACT_LEGAL: MSAs, SLAs, DPAs, order forms, terms of service, indemnification, liability.\n"
             "- GENERAL_RESOURCE: General company material or miscellaneous not fitting the above categories.\n\n"
-            "Respond ONLY with a valid JSON object in this exact schema without any markdown wrapping:\n"
-            "{\n"
-            '  "category": "BATTLECARD" | "PRICING_PACKAGING" | "CASE_STUDY_ROI" | "SECURITY_COMPLIANCE" | "PRODUCT_SPEC" | "CONTRACT_LEGAL" | "GENERAL_RESOURCE",\n'
-            '  "target_competitor": "Name of competitor if relevant or null",\n'
-            '  "target_industry": "Industry like Fintech, Healthcare, Enterprise SaaS or null",\n'
-            '  "sales_summary": "Concise 1-2 sentence executive summary of what this document gives to a sales rep",\n'
-            '  "sales_tags": ["tag1", "tag2", "tag3"],\n'
-            '  "confidence_score": 0.95\n'
-            "}"
+            "Rules:\n"
+            "- Personal documents (resumes/CVs), internal notes and anything not written to help sell are GENERAL_RESOURCE.\n"
+            "- target_competitor is a rival vendor the document positions against. A tool or product that someone "
+            "merely uses, lists as a skill, or integrates with is NOT a competitor - use null.\n"
+            "- target_industry is the customer industry the document targets, or null.\n"
+            "- sales_summary is 1-2 sentences on what the document gives a sales rep; sales_tags has at most 6 short tags.\n"
+            "Reply with only the JSON object."
         )
 
         user_content = (
@@ -270,91 +355,135 @@ class SalesClassifier:
             "Content-Type": "application/json",
         }
 
-        candidate_models = [
-            self.model_name,
-            "nvidia/nemotron-3.5-lightning:free",
-            "google/gemma-4-26b-a4b-it:free",
-            "liquid/lfm-2.5-2.6b:free",
-        ]
-        # De-duplicate while preserving order
-        unique_models = []
-        for m in candidate_models:
-            if m and m not in unique_models:
-                unique_models.append(m)
+        candidates: list[str] = []
+        for model in [self.model_name, *self.fallback_models]:
+            if model and model not in candidates:
+                candidates.append(model)
 
-        for model in unique_models:
-            try:
-                payload = {
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_content},
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": 400,
-                }
-
-                resp = requests.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers=headers,
-                    json=payload,
-                    timeout=8,
+        for model in candidates:
+            for attempt in range(1, self.attempts_per_model + 1):
+                outcome = self._request_classification(
+                    requests, headers, model, system_prompt, user_content, filename, attempt
                 )
-
-                if resp.status_code == 200:
-                    data = resp.json()
-                    choices = data.get("choices", [])
-                    if not choices:
-                        continue
-                    msg = choices[0].get("message", {})
-                    raw_text = msg.get("content") or ""
-                    if not raw_text.strip():
-                        continue
-
-                    # Strip <think>...</think> if present (DeepSeek / Nemotron reasoning)
-                    raw_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
-
-                    # Extract JSON block
-                    json_match = re.search(r"\{.*\}", raw_text, flags=re.DOTALL)
-                    if not json_match:
-                        continue
-                    clean_json = json_match.group(0).strip()
-
-                    parsed = json.loads(clean_json)
-                    cat = str(parsed.get("category", "GENERAL_RESOURCE")).upper().strip()
-                    if cat not in VALID_SALES_CATEGORIES:
-                        cat = "GENERAL_RESOURCE"
-
-                    competitor = parsed.get("target_competitor")
-                    if competitor and str(competitor).lower() in ("null", "none", ""):
-                        competitor = None
-
-                    industry = parsed.get("target_industry")
-                    if industry and str(industry).lower() in ("null", "none", ""):
-                        industry = None
-
-                    summary = str(parsed.get("sales_summary", "")).strip()
-                    raw_tags = parsed.get("sales_tags", [])
-                    tags = [str(t).strip() for t in raw_tags if str(t).strip()][:6]
-
-                    confidence = float(parsed.get("confidence_score", 0.9))
-
-                    return SalesClassificationResult(
-                        category=cat,
-                        target_competitor=competitor,
-                        target_industry=industry,
-                        sales_summary=summary or f"Sales resource: {filename}",
-                        sales_tags=tags,
-                        confidence_score=confidence,
-                        classifier_used=f"openrouter:{model}",
-                    )
-                else:
-                    print(f"[SalesClassifier] Model '{model}' returned status {resp.status_code} ({resp.text[:120]}), trying next candidate...")
-            except Exception as e:
-                print(f"[SalesClassifier] Exception with model '{model}': {e}")
-                continue
-
+                if isinstance(outcome, SalesClassificationResult):
+                    return outcome
+                if outcome == _STOP:
+                    return None
+                if outcome == _NEXT_MODEL:
+                    break
         return None
+
+    def _request_classification(
+        self,
+        requests_module,
+        headers: dict[str, str],
+        model: str,
+        system_prompt: str,
+        user_content: str,
+        filename: str,
+        attempt: int,
+    ):
+        """One classification request. Returns a result, or why it produced none.
+
+        Every rejected reply is logged with its reason: a 200 response that could
+        not be used used to be skipped silently, which hid which models worked.
+        """
+        body = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            "temperature": 0,
+            "max_tokens": self.max_output_tokens,
+            # The reply must be valid JSON matching the classification schema...
+            "response_format": {"type": "json_schema", "json_schema": classification_response_schema()},
+            # ...and only models whose providers honour every parameter here may
+            # serve it, so openrouter/free never routes to one that ignores the schema.
+            "provider": {"require_parameters": True},
+            # A classification does not need a chain of thought, and reasoning is
+            # what used to exhaust the token budget before any answer was written.
+            "reasoning": {"enabled": False},
+        }
+        label = f"{model} (attempt {attempt}/{self.attempts_per_model})"
+
+        try:
+            resp = requests_module.post(_OPENROUTER_URL, headers=headers, json=body, timeout=self.request_timeout)
+        except Exception as err:
+            print(f"[SalesClassifier] {label} request failed: {type(err).__name__}")
+            return _RETRY
+
+        if resp.status_code != 200:
+            detail = (resp.text or "")[:160]
+            if resp.status_code == 429 and "free-models-per-day" in detail:
+                # Every free model draws on the same daily allowance, so trying others
+                # only delays the fallback.
+                print("[SalesClassifier] OpenRouter free-model daily limit reached; "
+                      "using keyword rules until it resets.")
+                return _STOP
+            if resp.status_code in (401, 402):
+                print(f"[SalesClassifier] OpenRouter rejected the API key or account (HTTP {resp.status_code}): {detail}")
+                return _STOP
+            if resp.status_code in (400, 403, 404):
+                print(f"[SalesClassifier] {label} cannot serve this request (HTTP {resp.status_code}): {detail}")
+                return _NEXT_MODEL
+            print(f"[SalesClassifier] {label} HTTP {resp.status_code}: {detail}")
+            return _RETRY
+
+        try:
+            data = resp.json()
+        except ValueError:
+            print(f"[SalesClassifier] {label} returned a non-JSON response body")
+            return _RETRY
+
+        served = data.get("model") or model
+        choice = (data.get("choices") or [{}])[0]
+        content = ((choice.get("message") or {}).get("content") or "").strip()
+        finish = choice.get("finish_reason")
+
+        if not content:
+            print(f"[SalesClassifier] {label} served by {served} returned no content (finish={finish}); rejected")
+            return _RETRY
+
+        parsed = _parse_json_object(content)
+        if parsed is None:
+            print(f"[SalesClassifier] {label} served by {served} returned unusable output "
+                  f"(finish={finish}): {content[:100]!r}; rejected")
+            return _RETRY
+
+        category = str(parsed.get("category", "")).upper().strip()
+        if category not in VALID_SALES_CATEGORIES:
+            print(f"[SalesClassifier] {label} served by {served} returned unknown category {category!r}; rejected")
+            return _RETRY
+
+        competitor = parsed.get("target_competitor")
+        if competitor is not None and str(competitor).strip().lower() in ("", "null", "none"):
+            competitor = None
+        industry = parsed.get("target_industry")
+        if industry is not None and str(industry).strip().lower() in ("", "null", "none"):
+            industry = None
+
+        raw_tags = parsed.get("sales_tags") or []
+        tags = [str(t).strip() for t in raw_tags if str(t).strip()][:6] if isinstance(raw_tags, list) else []
+        try:
+            confidence = max(0.0, min(1.0, float(parsed.get("confidence_score", 0.9))))
+        except (TypeError, ValueError):
+            confidence = 0.9
+
+        # Record which model actually classified the document: openrouter/free picks
+        # one per request, and a poor classification is only diagnosable if you can
+        # see which model made it.
+        used = f"openrouter:{served}" if served == model else f"openrouter:{model}->{served}"
+        print(f"[SalesClassifier] Classified '{filename}' as {category} via {used}")
+        return SalesClassificationResult(
+            category=category,
+            target_competitor=str(competitor).strip() if competitor else None,
+            target_industry=str(industry).strip() if industry else None,
+            sales_summary=str(parsed.get("sales_summary") or "").strip() or f"Sales resource: {filename}",
+            sales_tags=tags,
+            confidence_score=confidence,
+            classifier_used=used,
+        )
 
     def _heuristic_classification(self, filename: str, text_content: str) -> SalesClassificationResult:
         """

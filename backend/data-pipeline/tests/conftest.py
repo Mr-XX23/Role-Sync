@@ -44,6 +44,12 @@ if os.environ.get("ROLESYNC_TESTS_USE_LIVE_SERVICES", "").strip().lower() not in
         # it on first use.
         os.environ["CATALOG_DATABASE_URL"] = f"{_base}/{_db_name}-test"
 
+    # No test may spend a live model request (or the shared free daily allowance):
+    # without a key the classifier uses its keyword rules. Tests that exercise the
+    # OpenRouter path set a key and fake the HTTP call themselves.
+    for _openrouter_var in ("OPENROUTER_API_KEY", "OPEN_ROUTER_API", "OPENROUTER_API"):
+        os.environ[_openrouter_var] = ""
+
     # Nothing listens here, so every Mongo-backed store falls back to memory, as it
     # already does on the host, where the compose hostname does not resolve.
     os.environ["MONGODB_URI"] = "mongodb://127.0.0.1:1"

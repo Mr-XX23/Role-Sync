@@ -917,11 +917,10 @@ async def upload_document(
         created_at = now_str
         owner_id = access.user_id
 
-    # Pre-classify with filename to provide immediate UI feedback while parsing in background
-    prelim_classification = sales_classifier.classify(
+    # An instant placeholder label while the document is processed. The model
+    # classification runs once, on the parsed text, in the background job.
+    prelim_classification = sales_classifier.classify_preliminary(
         filename=filename,
-        mime_type=file.content_type or "application/octet-stream",
-        text_content=filename,
         user_override_category=category,
         user_override_competitor=target_competitor,
     )
@@ -1045,9 +1044,9 @@ def ingest_url(
         created_at = now_str
         owner_id = access.user_id
 
-    prelim_classification = sales_classifier.classify(
+    # Placeholder label only; the background job classifies the full page once.
+    prelim_classification = sales_classifier.classify_preliminary(
         filename=doc_name,
-        mime_type="text/html",
         text_content=cleaned_text[:2000],
         user_override_category=req.category,
         user_override_competitor=req.target_competitor,
