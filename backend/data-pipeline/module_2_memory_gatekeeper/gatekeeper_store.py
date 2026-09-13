@@ -56,6 +56,8 @@ class HoldRecord:
     status: str = "HELD"
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: Optional[datetime] = None
+    # {"kind": <job kind>, "payload": {...}} - enough to requeue the document.
+    replay: Optional[dict[str, Any]] = None
 
 
 class GatekeeperStore:
@@ -275,6 +277,32 @@ class GatekeeperStore:
             if h.tenant_id == tenant_id and h.status == "HELD" and (not kind or h.kind == kind.upper())
         ][:limit]
 
+    def attach_replay(self, doc_id: str, replay: dict[str, Any], tenant_id: str = "") -> bool:
+        """Record how to requeue a held document.
+
+        The gatekeeper engine decides to hold a document without knowing how it
+        arrived; only the ingestion path that called it does. So that path attaches
+        the replay instructions afterwards. Returns False if no hold matches.
+        """
+        if self._db:
+            try:
+                with session_scope() as session:
+                    stmt = select(GatekeeperHold).where(self._id_clause(GatekeeperHold.doc_id, doc_id))
+                    if tenant_id:
+                        stmt = stmt.where(GatekeeperHold.tenant_id == tenant_id)
+                    row = session.execute(stmt.limit(1)).scalars().first()
+                    if row is not None:
+                        row.replay = replay
+                        return True
+            except Exception as err:
+                print(f"[GatekeeperStore] Could not attach replay for {doc_id}: {err}")
+
+        for record in self._holds.values():
+            if _matches_id(record.doc_id, doc_id) and (not tenant_id or record.tenant_id == tenant_id):
+                record.replay = replay
+                return True
+        return False
+
     def release(self, doc_id: str) -> bool:
         """Mark a held document released for replay (human review outcome)."""
         if self._db:
@@ -333,6 +361,7 @@ class GatekeeperStore:
             status=row.status,
             created_at=row.created_at,
             expires_at=row.expires_at,
+            replay=getattr(row, "replay", None),
         )
 
 

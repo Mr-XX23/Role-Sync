@@ -90,7 +90,11 @@ def test_queue_worker_async():
 
         doc = store.get_document("tenant_300:gmail:msg_qw_01")
         assert doc is not None
-        assert doc.status in ("STAGED", "PARSED_SUCCESS", "GATEKEEPER_ACCEPTED", "VECTOR_STORE_INDEXED")
+        # EMBEDDING_QUEUED: embedding is a separate job, so the connector job's own
+        # lineage ends there and the embed job records VECTOR_STORE_INDEXED.
+        assert doc.status in (
+            "STAGED", "PARSED_SUCCESS", "GATEKEEPER_ACCEPTED", "EMBEDDING_QUEUED", "VECTOR_STORE_INDEXED",
+        )
 
         await worker.stop()
 

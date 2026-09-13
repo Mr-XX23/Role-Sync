@@ -238,7 +238,7 @@ def test_a_failed_connector_event_keeps_its_staged_bytes(monkeypatch, object_sto
         lambda ref: discarded.append(ref),
     )
 
-    async def explode(event):
+    async def explode(event, skip_gatekeeper=False):
         raise RuntimeError("LlamaParse returned 500")
 
     monkeypatch.setattr(worker, "_process_event", explode)
@@ -266,8 +266,8 @@ def test_a_successful_connector_event_cleans_up_its_staged_bytes(monkeypatch, ob
         lambda ref: discarded.append(ref),
     )
 
-    async def succeed(event):
-        return None
+    async def succeed(event, skip_gatekeeper=False):
+        return "embed_queued"
 
     monkeypatch.setattr(worker, "_process_event", succeed)
     payload = event_to_payload(make_event(metadata={"name": "x.pdf", "raw_bytes": b"data"}))

@@ -153,7 +153,44 @@ class GatekeeperHold(Base):
     status = Column(String(16), nullable=False, default="HELD")  # HELD | RELEASED
     created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
     expires_at = Column(DateTime(timezone=True), nullable=True)
+    # How to put the document back on the ingestion queue once a person has
+    # reviewed it: the job kind plus the payload that originally carried it.
+    # Without this, releasing a hold only changed its status - the architecture's
+    # "replay after human review" loop ended in a dead end.
+    replay = Column(JSONB, nullable=True)
 
+
+class ParentChunk(Base):
+    """The wide span of text a small, searchable child chunk belongs to.
+
+    One chunk size had to serve two opposing purposes: small chunks match a query
+    precisely but give a model too little to answer from, large ones carry the
+    context but match loosely. Children are embedded and searched; the parent is
+    what gets returned as context. Stored once per parent rather than copied onto
+    each child, so it is not duplicated across siblings. Not embedded.
+    """
+
+    __tablename__ = "parent_chunks"
+    __table_args__ = (
+        Index("ix_rag_parent_chunks_doc", "doc_id"),
+        Index("ix_rag_parent_chunks_doc_ref", "doc_ref_id"),
+        Index("ix_rag_parent_chunks_tenant_source", "tenant_id", "source"),
+        {"schema": RAG_SCHEMA},
+    )
+
+    parent_id = Column(String(600), primary_key=True)
+    doc_id = Column(String(512), nullable=False)
+    # Deletion is requested by either id form, and connector disconnects purge by
+    # workspace + source. These mirror the vector table so erasure matches exactly
+    # - a LIKE on the canonical id would treat "_" in "google_calendar" as a
+    # wildcard and could remove another document's parents.
+    doc_ref_id = Column(String(512), nullable=False, default="")
+    source = Column(String(64), nullable=False, default="")
+    user_id = Column(String(128), nullable=False, default="")
+    tenant_id = Column(String(128), nullable=False, default="")
+    parent_index = Column(Integer, nullable=False, default=0)
+    text = Column(Text, nullable=False, default="")
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow)
 
 class ChunkHash(Base):
     """Chunk fingerprint enabling cross-run delta de-duplication."""

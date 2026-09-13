@@ -102,6 +102,31 @@ def evaluate_gatekeeper(parsed_doc: ParsedDocument) -> GatekeeperDecision:
     return gatekeeper_engine.evaluate_document(parsed_doc)
 
 
+def record_gatekeeper_override(parsed_doc: ParsedDocument) -> None:
+    """Audit a human release, so the trail shows the gate was bypassed on purpose.
+
+    Replaying a released hold skips the gatekeeper - evaluating it again would
+    only reject it again and loop. That bypass has to be visible in the same audit
+    trail as every other gatekeeper decision.
+    """
+    try:
+        from module_2_memory_gatekeeper.gatekeeper_store import gatekeeper_store
+        from module_2_memory_gatekeeper.policy import load_policy
+
+        gatekeeper_store.record_decision(
+            doc_id=parsed_doc.doc_id,
+            tenant_id=parsed_doc.tenant_id,
+            user_id=parsed_doc.user_id,
+            source=parsed_doc.source,
+            category="",
+            decision="ACCEPTED_OVERRIDE",
+            reason="Released after human review; gatekeeper bypassed on replay",
+            policy_version=load_policy().version,
+        )
+    except Exception as err:
+        print(f"[IngestionGuards] Could not audit override for {parsed_doc.doc_id}: {err}")
+
+
 def gatekeeper_message(decision: GatekeeperDecision) -> str:
     """Generic, user-facing explanation for a gatekeeper rejection."""
     if decision.decision == "QUARANTINED":

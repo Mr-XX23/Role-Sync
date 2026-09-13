@@ -23,10 +23,11 @@ from module_1_document_processing.knowledge_vault_routes import router as knowle
 from module_1_document_processing.knowledge_vault_routes import (
     mark_document_failed,
     process_document_job,
+    process_embed_job,
     read_rag_config,
 )
 from module_3_batch_ingestion_vector.chunk_config import set_config_reader
-from module_1_document_processing.pipeline.job_payloads import JOB_DOCUMENT_INGEST
+from module_1_document_processing.pipeline.job_payloads import JOB_DOCUMENT_EMBED, JOB_DOCUMENT_INGEST
 from module_1_document_processing.pipeline.queue_routes import (
     metrics_router as queue_metrics_router,
     router as queue_router,
@@ -73,6 +74,8 @@ async def lifespan(app: FastAPI):
     # Uploads, URL ingests and reindexes share the connector queue, so every
     # ingestion path gets the same durability, retries and dead-lettering.
     queue_worker.register_handler(JOB_DOCUMENT_INGEST, process_document_job, on_dead=mark_document_failed)
+    # Embedding is a separate stage, so a failure there retries only itself.
+    queue_worker.register_handler(JOB_DOCUMENT_EMBED, process_embed_job, on_dead=mark_document_failed)
 
     # Start Staging Queue Worker
     await queue_worker.start()

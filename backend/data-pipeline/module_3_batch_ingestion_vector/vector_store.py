@@ -99,6 +99,14 @@ class VectorRecord:
             updated_at=updated_at,
         )
 
+
+def _parents():
+    """Imported lazily so this module has no import-time dependency on it."""
+    from module_3_batch_ingestion_vector.parent_store import parent_store
+
+    return parent_store
+
+
 class VectorStore:
     """MongoDB Atlas & In-Memory Vector Store executing persistent storage, ACL security pre-filtering, and similarity searches."""
 
@@ -279,6 +287,10 @@ class VectorStore:
         if pgvector_index is not None:
             pgvector_index.delete_by_doc_id(doc_id)
 
+        # Every path that removes a document's vectors - deletion, GDPR erasure,
+        # re-index, repair - goes through here, so parents are erased here too.
+        _parents().delete_by_doc_id(doc_id)
+
         count = max(len(to_delete), mongo_deleted)
         print(f"[VectorStore] Purged {count} vectors for doc_id={doc_id}.")
         return count
@@ -304,6 +316,8 @@ class VectorStore:
 
         if pgvector_index is not None:
             pgvector_index.delete_by_tenant_source_user(tenant_id, source, user_id)
+
+        _parents().delete_by_tenant_source_user(tenant_id, source, user_id)
 
         count = max(len(to_delete), mongo_deleted)
         print(f"[VectorStore] Purged {count} vectors for tenant={tenant_id}, source={source}, user={user_id}.")

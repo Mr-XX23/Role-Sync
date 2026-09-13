@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 import hashlib
 from module_1_document_processing.parsing.parsed_document import ParsedDocument
-from module_3_batch_ingestion_vector.chunk_config import ChunkConfig, resolve_chunk_config
+from module_3_batch_ingestion_vector.chunk_config import ChunkConfig, parent_size_for, resolve_chunk_config
 
 @dataclass
 class TextNode:
@@ -23,6 +23,23 @@ class TextNode:
     next_chunk_id: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # The wider span this chunk belongs to, returned as context when it matches.
+    parent_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ParentSpan:
+    """A wide span of a document that its small, searchable children belong to."""
+
+    parent_id: str
+    doc_id: str
+    tenant_id: str
+    parent_index: int
+    text: str
+    doc_ref_id: str = ""
+    source: str = ""
+    user_id: str = ""
+
 
 class HierarchicalChunker:
     """Splits a document into overlapping text nodes with hash signatures.
@@ -37,6 +54,14 @@ class HierarchicalChunker:
 
     Settings are resolved per document from the workspace's RAG config unless
     passed explicitly, so every ingestion path chunks the same way.
+
+    It is also now genuinely hierarchical, as the architecture specifies. One
+    chunk size used to serve two opposing purposes: small chunks match a query
+    precisely but give a model too little to answer from, large ones carry the
+    context but match loosely. The document is split into wide parents, and each
+    parent into small children. Children are embedded and searched; a matched
+    child brings back its parent as context. Overlap is applied across the whole
+    child sequence, so a sentence straddling a parent boundary is still covered.
     """
 
     def __init__(self, chunk_size: Optional[int] = None, chunk_overlap: Optional[int] = None) -> None:
@@ -116,12 +141,41 @@ class HierarchicalChunker:
         return overlapped
 
     def chunk_document(self, document: ParsedDocument) -> list[TextNode]:
+        """The searchable children. See chunk_hierarchy for their parents too."""
+        return self.chunk_hierarchy(document)[1]
+
+    def chunk_hierarchy(self, document: ParsedDocument) -> tuple[list[ParentSpan], list[TextNode]]:
         text = (document.text_content or "").strip()
         if not text:
-            return []
+            return [], []
 
         config = self.config_for(document)
-        chunks = self._apply_overlap(self._pack(text, config.chunk_size), config.chunk_overlap)
+        parent_texts = self._pack(text, parent_size_for(config.chunk_size))
+
+        # Children are cut from each parent, remembering which parent owns them,
+        # then overlapped as one sequence so context still spans parent edges.
+        base_children: list[str] = []
+        owner: list[int] = []
+        for parent_index, parent_text in enumerate(parent_texts):
+            for child in self._pack(parent_text, config.chunk_size):
+                base_children.append(child)
+                owner.append(parent_index)
+        chunks = self._apply_overlap(base_children, config.chunk_overlap)
+
+        parent_ids = [f"{document.doc_id}_parent_{k}" for k in range(len(parent_texts))]
+        parents = [
+            ParentSpan(
+                parent_id=parent_ids[k],
+                doc_id=document.doc_id,
+                tenant_id=document.tenant_id,
+                parent_index=k,
+                text=parent_text,
+                doc_ref_id=document.external_id or document.doc_id,
+                source=document.source or "",
+                user_id=document.user_id or "",
+            )
+            for k, parent_text in enumerate(parent_texts)
+        ]
 
         nodes: list[TextNode] = []
         total = len(chunks)
@@ -146,6 +200,8 @@ class HierarchicalChunker:
                 "total_chunks": total,
                 "prev_chunk_id": prev_id,
                 "next_chunk_id": next_id,
+                "parent_id": parent_ids[owner[idx]],
+                "parent_index": owner[idx],
             }
 
             node = TextNode(
@@ -164,12 +220,13 @@ class HierarchicalChunker:
                 prev_chunk_id=prev_id,
                 next_chunk_id=next_id,
                 metadata=node_metadata,
+                parent_id=parent_ids[owner[idx]],
             )
             nodes.append(node)
 
         print(
-            f"[HierarchicalChunker] Chunked doc_id={document.doc_id} into {len(nodes)} linked nodes "
-            f"(size={config.chunk_size}, overlap={config.chunk_overlap}, doc_ref_id={doc_ref}) "
-            f"with ACL tags: {document.acl}"
+            f"[HierarchicalChunker] Chunked doc_id={document.doc_id} into {len(nodes)} child nodes "
+            f"under {len(parents)} parent(s) (size={config.chunk_size}, overlap={config.chunk_overlap}, "
+            f"doc_ref_id={doc_ref}) with ACL tags: {document.acl}"
         )
-        return nodes
+        return parents, nodes

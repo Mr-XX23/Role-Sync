@@ -18,6 +18,8 @@ from module_1_document_processing.workspace_access import (
     require_workspace_member,
     require_writer,
 )
+from module_1_document_processing.pipeline import ingestion_guards as guards
+from module_1_document_processing.pipeline.durable_queue import ingest_queue
 from module_2_memory_gatekeeper.gatekeeper_store import gatekeeper_store
 from module_2_memory_gatekeeper.policy import load_policy
 from module_2_memory_gatekeeper.semantic_scorer import semantic_scorer
@@ -29,6 +31,9 @@ class ReleaseResponse(BaseModel):
     status: str
     doc_id: str
     message: str
+    # True when the document was put back on the ingestion queue. False only for
+    # holds recorded before replay existed, which carry nothing to replay.
+    requeued: bool = False
 
 
 @router.get("/gatekeeper/policy")
@@ -85,7 +90,13 @@ def list_holds(
 
 @router.post("/gatekeeper/holds/{doc_id}/release", response_model=ReleaseResponse)
 def release_hold(doc_id: str, access: WorkspaceAccess = Depends(require_workspace_member)):
-    """Release a held document after human review, so it can be re-ingested."""
+    """Release a held document after review and put it back on the ingestion queue.
+
+    This used to change the hold's status and nothing else, leaving the person to
+    re-upload the file - the architecture's "replay after human review" loop ended
+    in a dead end. The replayed job skips the gatekeeper (evaluating it again would
+    only reject it again) and that bypass is written to the audit trail.
+    """
     require_writer(access)
 
     hold = gatekeeper_store.get_hold(doc_id, tenant_id=access.workspace_id)
@@ -94,14 +105,39 @@ def release_hold(doc_id: str, access: WorkspaceAccess = Depends(require_workspac
     if not hold or hold.status != "HELD":
         raise HTTPException(status_code=404, detail="No held document with that id.")
 
+    replay = hold.replay if isinstance(hold.replay, dict) else None
+    can_replay = bool(replay and replay.get("kind") and isinstance(replay.get("payload"), dict))
+
+    # Checked before releasing: refusing afterwards would leave a released hold
+    # that was never requeued, and nothing to retry the release from.
+    if can_replay and ingest_queue.is_overloaded():
+        raise HTTPException(
+            status_code=503,
+            detail=guards.QUEUE_FULL_MESSAGE,
+            headers={"Retry-After": "120"},
+        )
+
     # Release by the canonical id the hold is stored under, not the caller's form.
     if not gatekeeper_store.release(hold.doc_id):
         raise HTTPException(status_code=409, detail="That document could not be released.")
 
+    if not can_replay:
+        return ReleaseResponse(
+            status="success",
+            doc_id=doc_id,
+            message=(
+                "Released. This document was held before automatic replay existed, "
+                "so re-upload or re-index it to add it to your Knowledge Vault."
+            ),
+            requeued=False,
+        )
+
+    ingest_queue.enqueue(replay["kind"], {**replay["payload"], "skip_gatekeeper": True})
     return ReleaseResponse(
         status="success",
         doc_id=doc_id,
-        message="Released for replay. Re-upload or re-index the document to ingest it.",
+        message="Released and queued for ingestion. It will appear in your Knowledge Vault shortly.",
+        requeued=True,
     )
 
 

@@ -48,9 +48,26 @@ def ok_response(count: int) -> FakeResponse:
 
 @pytest.fixture
 def no_sleep(monkeypatch):
-    """Backoff must not actually slow the tests; record what was asked for."""
+    """Backoff must not actually slow the tests; record what was asked for.
+
+    The fake replaces the embedding module's reference to `time`, not the global
+    `time.sleep`. Patching the global made every other thread in the process that
+    slept during the test land in this list, so the "never slept" assertions failed
+    intermittently depending on what else was running.
+    """
+    import time as real_time
+
     waits: list[float] = []
-    monkeypatch.setattr(ew.time, "sleep", lambda s: waits.append(s))
+
+    class _Time:
+        @staticmethod
+        def sleep(seconds: float) -> None:
+            waits.append(seconds)
+
+        def __getattr__(self, name):
+            return getattr(real_time, name)
+
+    monkeypatch.setattr(ew, "time", _Time())
     return waits
 
 

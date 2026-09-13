@@ -198,6 +198,21 @@ def ensure_vector_schema(engine=None, dimension: int | None = None) -> bool:
         return False
 
 
+# `Base.metadata.create_all` creates missing tables but never alters existing
+# ones, so a column added to a model after its table was first created would be
+# absent in any database that already ran. These run on every start and are
+# idempotent.
+_COLUMN_MIGRATIONS = (
+    f"ALTER TABLE {RAG_SCHEMA}.gatekeeper_holds ADD COLUMN IF NOT EXISTS replay JSONB;",
+)
+
+
+def apply_column_migrations(engine) -> None:
+    with engine.begin() as conn:
+        for statement in _COLUMN_MIGRATIONS:
+            conn.execute(text(statement))
+
+
 def init_rag_db() -> bool:
     """Create database, schema and tables. Returns True when persistence is live."""
     if persistence_disabled():
@@ -210,6 +225,7 @@ def init_rag_db() -> bool:
             conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {RAG_SCHEMA};"))
         from rag import models  # noqa: F401  (register models on Base)
         Base.metadata.create_all(bind=engine)
+        apply_column_migrations(engine)
 
         # The HNSW vector index is optional: a server without pgvector still
         # runs the pipeline, just with brute-force similarity search.
