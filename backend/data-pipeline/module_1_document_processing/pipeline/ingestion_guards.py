@@ -27,7 +27,12 @@ def _int_env(name: str, default: int) -> int:
 MAX_UPLOAD_BYTES = _int_env("MAX_UPLOAD_BYTES", 25 * 1024 * 1024)
 MAX_URL_FETCH_BYTES = _int_env("MAX_URL_FETCH_BYTES", 5 * 1024 * 1024)
 
-ALLOWED_UPLOAD_EXTS = {"PDF", "CSV", "TXT", "DOCX", "PPTX", "XLSX", "MD", "JSON", "TSV", "YAML", "YML"}
+# Documents parse locally or through LlamaParse; images go through LlamaParse OCR
+# (ParserCategory.LLAMA_IMAGE), so a screenshot or photographed page becomes searchable text.
+ALLOWED_UPLOAD_EXTS = {
+    "PDF", "CSV", "TXT", "DOCX", "PPTX", "XLSX", "MD", "JSON", "TSV", "YAML", "YML",
+    "PNG", "JPG", "JPEG", "WEBP", "GIF",
+}
 
 # Shared singletons so every path uses the same configured policy.
 security_scanner = SecurityScanner()
@@ -60,7 +65,7 @@ def validate_upload(filename: str, size_bytes: int) -> str:
         raise IngestionRejected(
             "UNSUPPORTED_TYPE",
             "That file type is not supported. Please upload a PDF, Word, Excel, "
-            "PowerPoint, CSV, text, Markdown or JSON file.",
+            "PowerPoint, CSV, text, Markdown, JSON or image (PNG, JPG, WEBP, GIF) file.",
         )
 
     if size_bytes <= 0:
