@@ -10,7 +10,7 @@ export const GuestRoute: React.FC<GuestRouteProps> = ({ children }) => {
   const { isAuthenticated } = useAppSelector((state) => state.auth);
 
   if (isAuthenticated) {
-    return <Navigate to="/select-role" replace />;
+    return <Navigate to="/salesman" replace />;
   }
 
   return <>{children}</>;

@@ -12,7 +12,7 @@ export const RegistrationFlowGuard: React.FC<RegistrationFlowGuardProps> = ({ ch
 
   // 1. Authenticated users shouldn't see registration/verification flows
   if (isAuthenticated) {
-    return <Navigate to="/select-role" replace />;
+    return <Navigate to="/salesman" replace />;
   }
 
   // 2. A just-completed verification (e.g. phone verified) intentionally clears

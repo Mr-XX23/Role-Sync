@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { Search, LogOut, Menu, User, Settings, ChevronDown } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { logoutUser } from '../../store/authSlice';
-import { clearActiveRole } from '../../store/roleSlice';
 import { setModalOpen } from '../../store/taskSlice';
 import { ThemeToggle } from '../ThemeToggle';
 
@@ -24,7 +23,6 @@ export const Header: React.FC<HeaderProps> = ({
 
   const handleLogout = () => {
     dispatch(logoutUser());
-    dispatch(clearActiveRole());
   };
 
   return (

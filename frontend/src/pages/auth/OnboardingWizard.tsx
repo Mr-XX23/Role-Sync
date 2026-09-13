@@ -17,7 +17,7 @@ export const OnboardingWizard: React.FC = () => {
 
   useEffect(() => {
     if (onboarding && onboarding.isCompleted) {
-      navigate('/select-role', { replace: true });
+      navigate('/salesman', { replace: true });
     }
   }, [onboarding, navigate]);
 
@@ -29,9 +29,9 @@ export const OnboardingWizard: React.FC = () => {
     }
 
     if (pollCount >= 10) {
-      console.warn('Workspace profile creation timed out after 30s. Skipping to role selection.');
+      console.warn('Workspace profile creation timed out after 30s. Skipping to the workspace.');
       setIsPolling(false);
-      navigate('/select-role', { replace: true });
+      navigate('/salesman', { replace: true });
       return;
     }
 
@@ -84,7 +84,7 @@ export const OnboardingWizard: React.FC = () => {
   const handleComplete = () => {
     dispatch(updateOnboarding({ currentStep: 'COMPLETE', completedSteps: ['PROFILE_SETUP', 'PREFERENCES_SETUP', 'CONFIRMATION'], isCompleted: true }))
       .then(() => {
-        navigate('/select-role', { replace: true });
+        navigate('/salesman', { replace: true });
       });
   };
 
