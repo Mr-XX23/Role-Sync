@@ -27,7 +27,10 @@ from module_1_document_processing.knowledge_vault_routes import (
 )
 from module_3_batch_ingestion_vector.chunk_config import set_config_reader
 from module_1_document_processing.pipeline.job_payloads import JOB_DOCUMENT_INGEST
-from module_1_document_processing.pipeline.queue_routes import router as queue_router
+from module_1_document_processing.pipeline.queue_routes import (
+    metrics_router as queue_metrics_router,
+    router as queue_router,
+)
 from module_1_document_processing.del_acl_and_reconc.reconciliation_routes import router as reconciliation_router
 from module_1_document_processing.del_acl_and_reconc.reconciliation_scheduler import reconciliation_scheduler
 from module_2_memory_gatekeeper.gatekeeper_routes import router as gatekeeper_router
@@ -154,6 +157,9 @@ app.include_router(knowledge_vault_router, prefix="/api/v1/data-pipeline")
 app.include_router(reconciliation_router, prefix="/api/v1")
 app.include_router(reconciliation_router, prefix="/api/v1/data-pipeline")
 app.include_router(queue_router, prefix="/api/v1")
+# Unauthenticated on purpose so a monitoring agent inside the network can
+# scrape it; counts only, no tenant data.
+app.include_router(queue_metrics_router, prefix="/api/v1")
 app.include_router(queue_router, prefix="/api/v1/data-pipeline")
 app.include_router(gatekeeper_router, prefix="/api/v1")
 app.include_router(gatekeeper_router, prefix="/api/v1/data-pipeline")

@@ -19,6 +19,14 @@ from module_1_document_processing.workspace_access import (
 
 router = APIRouter(tags=["Ingestion Queue"], dependencies=[Depends(bind_identity)])
 
+# Metrics are scraped by a monitoring agent, which has no user and no workspace
+# and so cannot satisfy the identity dependency above. They live on their own
+# router without it. This is safe because the service publishes no host port -
+# it is reachable only inside the compose network and through the gateway, which
+# authenticates its own routes - and because the response carries counts only,
+# never document content, filenames or workspace ids.
+metrics_router = APIRouter(tags=["Ingestion Queue"])
+
 
 @router.get("/ingestion/queue/stats")
 def queue_stats(access: WorkspaceAccess = Depends(require_workspace_member)):
@@ -27,17 +35,17 @@ def queue_stats(access: WorkspaceAccess = Depends(require_workspace_member)):
     return {"status": "success", "durable": stats.get("backend") == "redis", "queue": stats}
 
 
-@router.get("/ingestion/queue/metrics")
-def queue_metrics(access: WorkspaceAccess = Depends(require_workspace_member)):
+@metrics_router.get("/ingestion/queue/metrics")
+def queue_metrics():
     """The same figures in Prometheus text format, for Grafana.
 
     Queue *age* matters as much as depth: a backlog that is not draining looks
     identical to a healthy one if you only measure depth. Counters are totals
     since the Redis keys were created, so they survive a restart of this service.
 
-    Scraping this needs a public path on the gateway; today it is behind the same
-    workspace check as the rest of the pipeline API. It carries counts only, never
-    document content.
+    Deliberately unauthenticated - see the note on ``metrics_router``. Point a
+    scraper at http://data-pipeline:8000/api/v1/ingestion/queue/metrics from
+    inside the compose network.
     """
     stats = ingest_queue.stats()
     totals = stats.get("totals") or {}

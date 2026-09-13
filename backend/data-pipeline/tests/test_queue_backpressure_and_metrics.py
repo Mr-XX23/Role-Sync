@@ -160,6 +160,7 @@ def client(monkeypatch, queue) -> TestClient:
     )
     app = FastAPI()
     app.include_router(queue_routes.router, prefix="/api/v1")
+    app.include_router(queue_routes.metrics_router, prefix="/api/v1")
     return TestClient(app)
 
 
@@ -208,6 +209,29 @@ def test_stats_expose_age_limit_and_totals(client, queue):
     assert body["totals"]["enqueued"] == 1
 
 
-def test_metrics_need_workspace_membership(client):
+def test_metrics_can_be_scraped_without_an_identity(client, queue):
+    """A monitoring agent has no user and no workspace. It could never satisfy the
+    identity check the rest of the pipeline API uses, so metrics sit on their own
+    router - the service publishes no host port, so this is in-network only."""
+    bare = client.get("/api/v1/ingestion/queue/metrics")
+
+    assert bare.status_code == 200
+    assert "rolesync_ingest_queue_depth" in bare.text
+
+
+def test_metrics_leak_no_tenant_data(client, queue):
+    """Unauthenticated means the body must carry counts and nothing else."""
+    queue.enqueue("doc", {"doc_id": "doc_secret", "tenant_id": WORKSPACE, "filename": "acquisition-plan.pdf"})
+
+    body = client.get("/api/v1/ingestion/queue/metrics").text
+
+    assert "doc_secret" not in body
+    assert "acquisition-plan.pdf" not in body
+    assert WORKSPACE not in body
+
+
+def test_the_detailed_views_still_require_membership(client):
+    """Only metrics are open; anything naming a document stays workspace-scoped."""
     outsider = str(uuid.uuid4())
-    assert get(client, "/ingestion/queue/metrics", user=outsider).status_code == 403
+    assert get(client, "/ingestion/queue/stats", user=outsider).status_code == 403
+    assert get(client, "/ingestion/queue/dead-letters", user=outsider).status_code == 403
