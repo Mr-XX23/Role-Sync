@@ -56,7 +56,7 @@ export const Footer: React.FC = () => {
               </p>
               <div className="mt-8 flex flex-col sm:flex-row justify-center gap-3">
                 <Link
-                  to={isAuthenticated ? '/select-role' : '/register'}
+                  to={isAuthenticated ? '/salesman' : '/register'}
                   className="group inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground shadow-md hover:opacity-90 active:scale-[0.98] transition-all"
                 >
                   {isAuthenticated ? 'Open dashboard' : 'Create your workspace'}

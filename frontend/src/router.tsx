@@ -7,10 +7,8 @@ import Changepassword from './pages/auth/Changepassword';
 import Register from './pages/auth/Register';
 import VerifyPhone from './pages/auth/VerifyPhone';
 import VerifyEmail from './pages/auth/VerifyEmail';
-import { RolePicker } from './pages/RolePicker';
 import { DashboardLayout } from './components/layout/DashboardLayout';
 import { ProtectedRoute } from './components/guards/ProtectedRoute';
-import { WorkspaceGuard } from './components/guards/WorkspaceGuard';
 import { RegistrationFlowGuard } from './components/guards/RegistrationFlowGuard';
 import { GuestRoute } from './components/guards/GuestRoute';
 import { OnboardingGuard } from './components/guards/OnboardingGuard';
@@ -96,28 +94,21 @@ export const router = createBrowserRouter([
     path: '/auth/onboarding',
     element: <Navigate to="/onboarding" replace />,
   },
+  // The Salesman Engine is the only persona, so the old picker URLs go straight to it.
   {
     path: '/workspace',
-    element: <Navigate to="/select-role" replace />,
+    element: <Navigate to="/salesman" replace />,
   },
   {
     path: '/select-role',
-    element: (
-      <ProtectedRoute>
-        <OnboardingGuard>
-          <RolePicker />
-        </OnboardingGuard>
-      </ProtectedRoute>
-    ),
+    element: <Navigate to="/salesman" replace />,
   },
   {
     path: '/salesman',
     element: (
       <ProtectedRoute>
         <OnboardingGuard>
-          <WorkspaceGuard requiredRole="sales">
-            <DashboardLayout />
-          </WorkspaceGuard>
+          <DashboardLayout />
         </OnboardingGuard>
       </ProtectedRoute>
     ),
@@ -170,6 +161,6 @@ export const router = createBrowserRouter([
   },
   {
     path: '*',
-    element: <Navigate to="/select-role" replace />,
+    element: <Navigate to="/salesman" replace />,
   },
 ]);

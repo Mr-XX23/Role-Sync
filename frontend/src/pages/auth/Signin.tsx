@@ -25,12 +25,7 @@ const Signin: React.FC = () => {
 
   React.useEffect(() => {
     if (isAuthenticated && user) {
-      const savedRole = localStorage.getItem('rolesync-active-role');
-      let targetRoute = '/select-role';
-      if (savedRole === 'sales') targetRoute = '/salesman';
-      else if (savedRole === 'teacher') targetRoute = '/teacher';
-      else if (savedRole === 'student') targetRoute = '/student';
-      navigate(targetRoute, { replace: true });
+      navigate('/salesman', { replace: true });
     }
   }, [isAuthenticated, user, navigate]);
 
@@ -101,7 +96,7 @@ const Signin: React.FC = () => {
                 <Button
                   variant="outline"
                   className="w-full flex items-center justify-center gap-2"
-                  onClick={() => navigate('/select-role')}
+                  onClick={() => navigate('/salesman')}
                   icon={<Home className="w-[16px] h-[16px]" />}
                 >
                   Home

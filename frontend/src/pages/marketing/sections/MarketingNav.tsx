@@ -32,7 +32,7 @@ export const MarketingNav: React.FC = () => {
   }, [open]);
 
   const primaryCta = isAuthenticated
-    ? { label: 'Open dashboard', to: '/select-role' }
+    ? { label: 'Open dashboard', to: '/salesman' }
     : { label: 'Get started', to: '/register' };
 
   return (

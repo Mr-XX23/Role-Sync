@@ -1,9 +1,7 @@
 import React from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink } from 'react-router-dom';
 import { Sparkles, Plus } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { useAppDispatch } from '../../store';
-import { clearActiveRole } from '../../store/roleSlice';
 
 export interface SidebarItem {
   id: string;
@@ -37,14 +35,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isOpen = true,
   onClose,
 }) => {
-  const navigate = useNavigate();
-  const dispatch = useAppDispatch();
-
-  const handleExitPersona = () => {
-    dispatch(clearActiveRole());
-    navigate('/select-role');
-  };
-
   return (
     <>
       {/* Mobile Backdrop Overlay */}
@@ -77,14 +67,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </span>
             </div>
           </div>
-
-          <button
-            onClick={handleExitPersona}
-            className="p-1.5 rounded-lg border border-border/60 hover:border-primary/30 hover:bg-primary/10 text-muted-foreground hover:text-primary transition-all duration-200 cursor-pointer group shrink-0"
-            title="Switch Persona Role"
-          >
-            <Sparkles className="w-3.5 h-3.5 transition-transform group-hover:rotate-12" />
-          </button>
         </div>
 
         {/* Navigation Section Title */}
