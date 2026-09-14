@@ -25,10 +25,21 @@ from typing import Any
 import yaml
 
 from app.core.enums import SkillCategory
-from app.skills.model import DESCRIPTION_CHARS, MAX_TOOLS, ParsedSkill, Skill, SkillContentError, clean_content, humanize
+from app.skills.model import (
+    DESCRIPTION_CHARS,
+    MAX_TOOLS,
+    NAME_CHARS,
+    ParsedSkill,
+    Skill,
+    SkillContentError,
+    clean_content,
+    humanize,
+    slugify,
+)
 
 MAX_FILE_BYTES = 64 * 1024
 _FRONTMATTER = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)(.*)\Z", re.DOTALL)
+_TITLE = re.compile(r"#[ \t]+(.+?)[ \t#]*")
 
 
 def read_frontmatter(text: str) -> tuple[dict[str, Any], str]:
@@ -58,7 +69,8 @@ def parse_skill_md(text: str, *, known_tools: Collection[str]) -> ParsedSkill:
     extra = meta.get("metadata") if isinstance(meta.get("metadata"), dict) else {}
     warnings: list[str] = []
 
-    raw_name = _text(extra.get("display_name")) or humanize(_text(meta.get("name")))
+    file_name = _text(meta.get("name"))
+    raw_name = _text(extra.get("display_name")) or _title(body, file_name) or humanize(file_name)
     description = " ".join(_text(meta.get("description")).split())
     if len(description) > DESCRIPTION_CHARS[1]:
         cut = description[: DESCRIPTION_CHARS[1] - 1].rsplit(" ", 1)[0].rstrip(",;:") + "…"
@@ -108,6 +120,17 @@ def render_skill_md(skill: Skill) -> str:
     }
     header = yaml.safe_dump(front, sort_keys=False, allow_unicode=True, width=1000).strip()
     return f"---\n{header}\n---\n\n{skill.content.instructions.strip()}\n"
+
+
+def _title(body: str, name: str) -> str:
+    """The ``# Heading`` a SKILL.md body opens with, when it spells the file's name ("PDF summaries" for
+    ``pdf-summaries``): the name as its author wrote it, where the id alone would give "Pdf summaries"."""
+    first = next((line.strip() for line in body.splitlines() if line.strip()), "")
+    match = _TITLE.fullmatch(first)
+    title = match.group(1).strip() if match else ""
+    if not NAME_CHARS[0] <= len(title) <= NAME_CHARS[1]:
+        return ""
+    return title if not name or slugify(title) == slugify(name) else ""
 
 
 def _text(value: Any) -> str:

@@ -69,7 +69,8 @@ def test_a_skill_from_another_agent_comes_in_with_what_fits_and_says_what_was_le
 
     parsed = parse_skill_md(file, known_tools=KNOWN)
 
-    assert parsed.name == "Pdf summaries" and parsed.category is SkillCategory.OTHER
+    # Named from the file's own heading, which keeps the author's spelling ("PDF", not "Pdf").
+    assert parsed.name == "PDF summaries" and parsed.category is SkillCategory.OTHER
     assert parsed.tools == ("recall",)
     assert len(parsed.description) <= DESCRIPTION_CHARS[1] and parsed.description.endswith("…")
     assert parsed.instructions.startswith("# PDF summaries")
@@ -95,7 +96,22 @@ def test_unusable_skill_files_are_refused_with_the_reason(text, message):
 
 def test_a_models_answer_wrapped_in_a_code_fence_still_reads():
     fenced = f"```markdown\n---\nname: follow-up\ndescription: Use when a meeting just ended.\n---\n{INSTRUCTIONS}\n```"
-    assert parse_skill_md(fenced, known_tools=KNOWN).name == "Follow up"
+    assert parse_skill_md(fenced, known_tools=KNOWN).name == "Follow-up"
+
+
+@pytest.mark.parametrize(
+    ("body", "name"),
+    [
+        ("# Meeting follow-up\n\n", "Meeting follow-up"),  # the heading spells the id: keep its hyphen
+        ("# Wrap-up\n\n", "Meeting follow up"),  # a heading about something else doesn't rename the skill
+        ("", "Meeting follow up"),
+    ],
+    ids=["heading-matches", "heading-differs", "no-heading"],
+)
+def test_an_imported_skill_is_named_from_its_heading_only_when_it_spells_the_id(body, name):
+    steps = INSTRUCTIONS.removeprefix("# Follow-up\n\n")
+    file = f"---\nname: meeting-follow-up\ndescription: Use when a meeting just ended.\n---\n{body}{steps}"
+    assert parse_skill_md(file, known_tools=KNOWN).name == name
 
 
 def test_content_is_tidied_and_checked():
