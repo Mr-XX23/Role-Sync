@@ -36,4 +36,8 @@ public class WorkspaceResponse {
     /** The caller's role in this workspace (OWNER, ADMIN, MEMBER, VIEWER), where known. */
     @JsonProperty("role")
     private String role;
+
+    /** The plan the workspace is effectively on; null only if no plans exist at all. */
+    @JsonProperty("plan")
+    private WorkspacePlanResponse plan;
 }

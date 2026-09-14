@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -37,9 +38,17 @@ public interface WorkspaceMembershipRepository extends JpaRepository<WorkspaceMe
 
     // --- Authorization projections (resolved as SQL joins; no lazy-proxy navigation) ---
 
-    @Query("SELECT wm.role.roleName FROM WorkspaceMembership wm " +
+    /** An active membership's role and whether its workspace is active (not suspended). */
+    interface ActiveMembershipView {
+        String getRoleName();
+
+        Boolean getWorkspaceActive();
+    }
+
+    @Query("SELECT wm.role.roleName AS roleName, wm.workspace.isActive AS workspaceActive FROM WorkspaceMembership wm " +
            "WHERE wm.workspace.workspaceId = :workspaceId AND wm.profile.profileId = :profileId AND wm.isActive = true")
-    Optional<String> findActiveRoleName(@Param("workspaceId") UUID workspaceId, @Param("profileId") UUID profileId);
+    Optional<ActiveMembershipView> findActiveMembership(@Param("workspaceId") UUID workspaceId,
+                                                        @Param("profileId") UUID profileId);
 
     /** Rows of (workspace id, role name) for the profile's active memberships. */
     @Query("SELECT wm.workspace.workspaceId, wm.role.roleName FROM WorkspaceMembership wm " +
@@ -51,4 +60,22 @@ public interface WorkspaceMembershipRepository extends JpaRepository<WorkspaceMe
 
     @Query("SELECT wm.profile.profileId FROM WorkspaceMembership wm WHERE wm.membershipId = :membershipId")
     Optional<UUID> findProfileIdByMembershipId(@Param("membershipId") UUID membershipId);
+
+    // --- Seat limits and the platform admin console ---
+
+    @Query("SELECT COUNT(wm) FROM WorkspaceMembership wm WHERE wm.workspace.workspaceId = :workspaceId AND wm.isActive = true")
+    long countActiveMembers(@Param("workspaceId") UUID workspaceId);
+
+    /** Rows of (workspace id, active memberships) for the given workspaces; workspaces with none are left out. */
+    @Query("SELECT wm.workspace.workspaceId, COUNT(wm) FROM WorkspaceMembership wm " +
+           "WHERE wm.workspace.workspaceId IN :workspaceIds AND wm.isActive = true GROUP BY wm.workspace.workspaceId")
+    List<Object[]> countActiveMembersByWorkspace(@Param("workspaceIds") Collection<UUID> workspaceIds);
+
+    @Query("SELECT COUNT(wm) FROM WorkspaceMembership wm WHERE wm.isActive = true")
+    long countAllActive();
+
+    /** Every membership of a profile (active or not) with its workspace and role, oldest first. */
+    @Query("SELECT wm FROM WorkspaceMembership wm JOIN FETCH wm.workspace JOIN FETCH wm.role " +
+           "WHERE wm.profile.profileId = :profileId ORDER BY wm.joinedAt ASC")
+    List<WorkspaceMembership> findAllOfProfile(@Param("profileId") UUID profileId);
 }

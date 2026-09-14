@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Search, LogOut, Menu, User, Settings, ChevronDown, KeyRound, Building2, Check } from 'lucide-react';
+import { Search, Menu, ChevronDown, Building2, Check } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../store';
-import { logoutUser } from '../../store/authSlice';
 import { setModalOpen } from '../../store/taskSlice';
 import { rememberWorkspace, setCurrentWorkspace } from '../../store/workspaceSlice';
 import { ThemeToggle } from '../ThemeToggle';
+import { DashboardSwitch } from './DashboardSwitch';
+import { ProfileMenu } from './ProfileMenu';
 
 const ROLE_LABEL: Record<string, string> = { OWNER: 'Owner', ADMIN: 'Admin', MEMBER: 'Member', VIEWER: 'Viewer' };
 
@@ -19,15 +19,8 @@ export const Header: React.FC<HeaderProps> = ({
   searchPlaceholder = 'Search synchronization mesh...',
 }) => {
   const dispatch = useAppDispatch();
-  const navigate = useNavigate();
-  const { user } = useAppSelector((state) => state.auth);
-  const { profile, workspaces, currentWorkspace } = useAppSelector((state) => state.workspace);
-  const [profileOpen, setProfileOpen] = useState(false);
+  const { workspaces, currentWorkspace } = useAppSelector((state) => state.workspace);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
-
-  const handleLogout = () => {
-    dispatch(logoutUser());
-  };
 
   return (
     <header className="flex justify-between items-center px-4 md:px-8 border-b border-border bg-card h-16 shadow-2xs sticky top-0 z-40">
@@ -51,9 +44,12 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Action Mesh and Operator Section */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3 md:gap-4">
+        {/* Workspace dashboard ↔ Super Admin Console (platform super admins only) */}
+        <DashboardSwitch />
+
         {/* Live Vector Mesh Node Status */}
-        <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 rounded-full border border-emerald-500/25">
+        <div className="hidden xl:flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 rounded-full border border-emerald-500/25">
           <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
           <span className="font-mono text-[9px] text-emerald-700 dark:text-emerald-400 font-bold uppercase tracking-wider">
             pgvector Node: ACTIVE
@@ -84,6 +80,7 @@ export const Header: React.FC<HeaderProps> = ({
                   </p>
                   {workspaces.map((ws) => {
                     const selected = ws.workspaceId === currentWorkspace.workspaceId;
+                    const suspended = ws.isActive === false;
                     return (
                       <button
                         key={ws.workspaceId}
@@ -103,7 +100,10 @@ export const Header: React.FC<HeaderProps> = ({
                       >
                         <span className="flex-1 min-w-0">
                           <span className="block font-semibold truncate">{ws.name}</span>
-                          <span className="block text-[10px] text-muted-foreground">{ROLE_LABEL[ws.role ?? ''] ?? 'Member'}</span>
+                          <span className="block text-[10px] text-muted-foreground">
+                            {suspended ? 'Suspended' : ROLE_LABEL[ws.role ?? ''] ?? 'Member'}
+                            {ws.plan && !suspended ? ` · ${ws.plan.name} plan` : ''}
+                          </span>
                         </span>
                         {selected && <Check className="w-3.5 h-3.5 text-primary shrink-0" />}
                       </button>
@@ -118,7 +118,7 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Deploy Trigger */}
         <button
           onClick={() => dispatch(setModalOpen(true))}
-          className="text-primary font-bold text-xs bg-primary/10 border border-primary/20 px-3.5 py-1.5 rounded-xl hover:bg-primary/20 active:scale-95 transition-all cursor-pointer shadow-2xs"
+          className="hidden lg:block text-primary font-bold text-xs bg-primary/10 border border-primary/20 px-3.5 py-1.5 rounded-xl hover:bg-primary/20 active:scale-95 transition-all cursor-pointer shadow-2xs"
         >
           Deploy Agent
         </button>
@@ -130,104 +130,7 @@ export const Header: React.FC<HeaderProps> = ({
         <span className="h-6 w-px bg-border/80 hidden sm:block" />
 
         {/* Profile Control Grid */}
-        <div className="relative">
-          <button
-            onClick={() => setProfileOpen(!profileOpen)}
-            className="flex items-center gap-1.5 p-1 rounded-full hover:bg-muted border border-transparent hover:border-border/60 transition-all duration-200"
-          >
-            <div className="h-7 w-7 rounded-full overflow-hidden bg-primary/20 border border-primary/15 flex items-center justify-center font-bold text-xs text-primary">
-              {profile?.avatarUrl ? (
-                <img src={profile.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-              ) : profile && profile.firstName ? (
-                (profile.firstName.slice(0, 1) + (profile.lastName ? profile.lastName.slice(0, 1) : '')).toUpperCase()
-              ) : (
-                user?.email ? user.email.slice(0, 2).toUpperCase() : 'OP'
-              )}
-            </div>
-            <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground transition-transform duration-300 ${profileOpen ? 'rotate-180' : ''}`} />
-          </button>
-
-          {/* Profile Dropdown Panel */}
-          {profileOpen && (
-            <>
-              <div
-                className="fixed inset-0 z-40"
-                onClick={() => setProfileOpen(false)}
-              />
-              <div className="absolute right-0 mt-2.5 w-56 bg-card border border-border rounded-xl shadow-md p-2 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
-                <div className="px-3.5 py-2 border-b border-border/60 mb-1.5">
-                  {profile && profile.firstName ? (
-                    <div className="mb-1.5">
-                      <p className="text-xs font-bold text-foreground truncate leading-none mb-0.5">
-                        {profile.displayName || `${profile.firstName} ${profile.lastName || ''}`.trim()}
-                      </p>
-                      {profile.jobTitle ? (
-                        <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider leading-none">
-                          {profile.jobTitle}
-                        </span>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-widest leading-none mb-1">
-                      operator account
-                    </p>
-                  )}
-                  <p className="text-[11px] text-muted-foreground font-mono truncate break-all leading-none">
-                    {user?.email || 'operator@rolesync.ai'}
-                  </p>
-                </div>
-
-                <div className="space-y-0.5">
-                  <button
-                    onClick={() => {
-                      setProfileOpen(false);
-                      navigate('/salesman/profile');
-                    }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-all duration-150 cursor-pointer"
-                  >
-                    <User className="w-4 h-4 text-muted-foreground" />
-                    <span>Profile Panel</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setProfileOpen(false);
-                      navigate('/salesman/settings');
-                    }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-all duration-150 cursor-pointer"
-                  >
-                    <Settings className="w-4 h-4 text-muted-foreground" />
-                    <span>System Settings</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setProfileOpen(false);
-                      navigate('/change-password');
-                    }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-all duration-150 cursor-pointer"
-                  >
-                    <KeyRound className="w-4 h-4 text-muted-foreground" />
-                    <span>Change Password</span>
-                  </button>
-                </div>
-
-                <div className="border-t border-border/60 my-1.5 pt-1.5">
-                  <button
-                    onClick={() => {
-                      setProfileOpen(false);
-                      handleLogout();
-                    }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold text-destructive hover:bg-destructive/10 transition-all duration-150"
-                  >
-                    <LogOut className="w-4 h-4" />
-                    <span>Terminate Session</span>
-                  </button>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
+        <ProfileMenu />
       </div>
     </header>
   );

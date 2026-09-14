@@ -14,6 +14,7 @@ import java.util.UUID;
 @Repository
 public interface WorkspaceNoteRepository extends JpaRepository<WorkspaceNote, UUID> {
     List<WorkspaceNote> findByWorkspaceWorkspaceId(UUID workspaceId);
+    long countByWorkspaceWorkspaceId(UUID workspaceId);
     List<WorkspaceNote> findByContextContextId(UUID contextId);
     List<WorkspaceNote> findByContextContextIdOrderByCreatedAtAsc(UUID contextId);
 

@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -24,4 +25,13 @@ public interface WorkspaceDealRepository extends JpaRepository<WorkspaceDeal, UU
     /** The workspace a deal id belongs to (SQL projection), to refuse ids from another workspace. */
     @Query("SELECT d.workspace.workspaceId FROM WorkspaceDeal d WHERE d.dealId = :dealId")
     Optional<UUID> findWorkspaceIdByDealId(@Param("dealId") UUID dealId);
+
+    long countByWorkspaceWorkspaceId(UUID workspaceId);
+
+    /** Deals of a workspace whose stage is none of {@code closedStages}. */
+    @Query("SELECT COUNT(d) FROM WorkspaceDeal d WHERE d.workspace.workspaceId = :workspaceId AND d.stage NOT IN :closedStages")
+    long countOpenInWorkspace(@Param("workspaceId") UUID workspaceId, @Param("closedStages") Collection<String> closedStages);
+
+    @Query("SELECT COUNT(d) FROM WorkspaceDeal d WHERE d.stage NOT IN :closedStages")
+    long countOpen(@Param("closedStages") Collection<String> closedStages);
 }
