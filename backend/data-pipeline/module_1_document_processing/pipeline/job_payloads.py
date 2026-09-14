@@ -65,7 +65,8 @@ def event_to_payload(event: CanonicalEvent) -> dict[str, Any]:
     if isinstance(raw_bytes, (bytes, bytearray)):
         staged_ref = stage_bytes(
             event.tenant_id,
-            f"{event.source}_{event.external_id}",
+            # Per rep: two reps' jobs for the same file must not share (and delete) one staged copy.
+            f"{event.source}_{event.user_id}_{event.external_id}",
             bytes(raw_bytes),
             content_type=str(metadata.get("mime_type") or ""),
         ) or ""

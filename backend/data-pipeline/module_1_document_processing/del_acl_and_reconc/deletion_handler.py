@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Any
+from module_1_document_processing.connector_privacy import document_id
 from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent
 from module_1_document_processing.pipeline.canonical_store import CanonicalStore
 from module_3_batch_ingestion_vector.delta_checker import VersionedHashDB
@@ -19,7 +20,7 @@ class DeletionHandler:
         self.vector_store = vector_store or VectorStore()
 
     def process_deletion(self, event: CanonicalEvent) -> bool:
-        doc_id = f"{event.tenant_id}:{event.source}:{event.external_id}"
+        doc_id = document_id(event.tenant_id, event.source, event.user_id, event.external_id)
         print(f"[DeletionHandler] Processing deletion request for doc_id={doc_id}")
 
         # 1. Update CanonicalStore status to DELETED.

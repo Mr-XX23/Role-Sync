@@ -56,13 +56,13 @@ def test_canonical_store():
         metadata={"title": "Meeting Notes"},
     )
     record = store.record_event(event, status="STAGED")
-    assert record.doc_id == "tenant_200:notion:page_999"
+    assert record.doc_id == "tenant_200:notion:usr_003:page_999"
     assert record.status == "STAGED"
     
     # Test ACL snapshot update
-    updated = store.update_acl("tenant_200:notion:page_999", ["usr_003", "usr_004"])
+    updated = store.update_acl("tenant_200:notion:usr_003:page_999", ["usr_003", "usr_004"])
     assert updated is True
-    doc = store.get_document("tenant_200:notion:page_999")
+    doc = store.get_document("tenant_200:notion:usr_003:page_999")
     assert doc is not None
     assert "usr_004" in doc.acl
 
@@ -88,7 +88,7 @@ def test_queue_worker_async():
         await worker.enqueue(event)
         await asyncio.sleep(0.2)  # Give worker loop time to process
 
-        doc = store.get_document("tenant_300:gmail:msg_qw_01")
+        doc = store.get_document("tenant_300:gmail:usr_005:msg_qw_01")
         assert doc is not None
         # EMBEDDING_QUEUED: embedding is a separate job, so the connector job's own
         # lineage ends there and the embed job records VECTOR_STORE_INDEXED.

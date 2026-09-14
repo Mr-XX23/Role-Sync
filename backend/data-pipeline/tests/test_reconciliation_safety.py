@@ -46,7 +46,7 @@ def test_incomplete_listing_never_deletes():
     assert report.missed_deletions_found == 2, "absences should still be detected"
     assert report.corrections_applied == 0, "but nothing may be tombstoned"
     assert report.skipped_deletions == 2
-    assert store.get_document(f"{TENANT}:{SOURCE}:f1").status != "DELETED"
+    assert store.get_document(f"{TENANT}:{SOURCE}:u1:f1").status != "DELETED"
 
 
 def test_mass_deletion_is_refused():
@@ -62,7 +62,7 @@ def test_mass_deletion_is_refused():
     assert report.corrections_applied == 0
     assert report.skipped_deletions == 5
     assert "safety limit" in report.reason
-    assert store.get_document(f"{TENANT}:{SOURCE}:f3").status != "DELETED"
+    assert store.get_document(f"{TENANT}:{SOURCE}:u1:f3").status != "DELETED"
 
 
 def test_deletion_applied_when_listing_is_complete_and_modest():
@@ -75,8 +75,8 @@ def test_deletion_applied_when_listing_is_complete_and_modest():
 
     assert report.aborted is False
     assert report.corrections_applied == 1
-    assert store.get_document(f"{TENANT}:{SOURCE}:gone").status == "DELETED"
-    assert store.get_document(f"{TENANT}:{SOURCE}:keep").status != "DELETED"
+    assert store.get_document(f"{TENANT}:{SOURCE}:u1:gone").status == "DELETED"
+    assert store.get_document(f"{TENANT}:{SOURCE}:u1:keep").status != "DELETED"
 
 
 def test_missing_acl_field_does_not_rewrite_permissions():
@@ -89,7 +89,7 @@ def test_missing_acl_field_does_not_rewrite_permissions():
     )
 
     assert report.acl_drift_found == 0
-    assert "u2@example.com" in store.get_document(f"{TENANT}:{SOURCE}:f1").acl
+    assert "u2@example.com" in store.get_document(f"{TENANT}:{SOURCE}:u1:f1").acl
 
 
 def test_reported_acl_drift_is_corrected():
@@ -104,7 +104,7 @@ def test_reported_acl_drift_is_corrected():
     )
 
     assert report.acl_drift_found == 1
-    assert "u9@example.com" in store.get_document(f"{TENANT}:{SOURCE}:f1").acl
+    assert "u9@example.com" in store.get_document(f"{TENANT}:{SOURCE}:u1:f1").acl
 
 
 def test_unbounded_sources_are_not_sweepable():
@@ -276,8 +276,8 @@ def test_multi_page_calendar_now_lets_a_deleted_event_be_tombstoned():
     assert listing.complete is True
     assert report.aborted is False
     assert report.corrections_applied == 1
-    assert store.get_document(f"{TENANT}:google_calendar:gone").status == "DELETED"
-    assert store.get_document(f"{TENANT}:google_calendar:e3").status != "DELETED"
+    assert store.get_document(f"{TENANT}:google_calendar:u1:gone").status == "DELETED"
+    assert store.get_document(f"{TENANT}:google_calendar:u1:e3").status != "DELETED"
 
 
 def test_truncated_calendar_listing_still_deletes_nothing():
@@ -293,7 +293,7 @@ def test_truncated_calendar_listing_still_deletes_nothing():
 
     assert report.corrections_applied == 0
     assert report.skipped_deletions == 1
-    assert store.get_document(f"{TENANT}:google_calendar:gone").status != "DELETED"
+    assert store.get_document(f"{TENANT}:google_calendar:u1:gone").status != "DELETED"
 
 
 def _too_large():
@@ -374,7 +374,7 @@ def test_a_rejected_page_deletes_nothing_end_to_end():
 
     assert report.corrections_applied == 0
     for ext in ("e1", "e2", "e3"):
-        assert store.get_document(f"{TENANT}:google_calendar:{ext}").status != "DELETED"
+        assert store.get_document(f"{TENANT}:google_calendar:u1:{ext}").status != "DELETED"
 
 
 def test_an_oversized_response_reported_without_raising_still_shrinks_the_page():

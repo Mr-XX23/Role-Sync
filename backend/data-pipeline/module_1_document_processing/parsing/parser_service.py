@@ -1,6 +1,7 @@
 import os
 import base64
 from typing import Any
+from module_1_document_processing.connector_privacy import document_id
 from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent
 from module_1_document_processing.parsing.mime_router import MIMERouter, ParserCategory
 from module_1_document_processing.parsing.parsed_document import ParsedDocument
@@ -27,7 +28,7 @@ class ParserService:
         self.max_attachment_size_mb = int(os.environ.get("MAX_EMAIL_ATTACHMENT_SIZE_MB", "25"))
 
     def parse_event(self, event: CanonicalEvent, raw_bytes: bytes | None = None) -> ParsedDocument:
-        doc_id = f"{event.tenant_id}:{event.source}:{event.external_id}"
+        doc_id = document_id(event.tenant_id, event.source, event.user_id, event.external_id)
 
         # Special Universal Handling for Gmail: Combine Email Body + Attachments (<25MB)
         if event.source.lower() == "gmail":
@@ -145,7 +146,7 @@ class ParserService:
         Parses a Gmail CanonicalEvent by combining email headers, body text, and valid attachments (<=25MB).
         Attachments >25MB or unsupported are selectively skipped without failing the parent email.
         """
-        doc_id = f"{event.tenant_id}:{event.source}:{event.external_id}"
+        doc_id = document_id(event.tenant_id, event.source, event.user_id, event.external_id)
         meta = event.metadata or {}
 
         subject = meta.get("subject") or "No Subject"
@@ -255,7 +256,7 @@ class ParserService:
         )
 
     def _parse_calendar_event(self, event: CanonicalEvent, raw_bytes: bytes | None = None) -> ParsedDocument:
-        doc_id = f"{event.tenant_id}:{event.source}:{event.external_id}"
+        doc_id = document_id(event.tenant_id, event.source, event.user_id, event.external_id)
         meta = event.metadata or {}
 
         text_content = meta.get("text_content") or meta.get("body")
@@ -299,7 +300,7 @@ class ParserService:
         Parses a Slack CanonicalEvent (DMs, Group Messages, Channels, Threads)
         and processes any attached files (PDFs, docs, images) into markdown.
         """
-        doc_id = f"{event.tenant_id}:{event.source}:{event.external_id}"
+        doc_id = document_id(event.tenant_id, event.source, event.user_id, event.external_id)
         meta = event.metadata or {}
 
         channel_name = meta.get("channel_name") or meta.get("channel_id") or "slack-chat"
@@ -370,7 +371,7 @@ class ParserService:
         """
         Parses a Notion CanonicalEvent (Pages, Databases, Blocks, Comments).
         """
-        doc_id = f"{event.tenant_id}:{event.source}:{event.external_id}"
+        doc_id = document_id(event.tenant_id, event.source, event.user_id, event.external_id)
         meta = event.metadata or {}
 
         title = meta.get("title") or meta.get("name") or "Untitled Notion Document"

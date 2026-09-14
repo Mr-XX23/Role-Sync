@@ -126,8 +126,8 @@ def test_scheduled_sweeps_skip_connections_saved_outside_a_workspace(monkeypatch
             return SimpleNamespace(complete=True, items=[{"external_id": "file_1"}], reason="")
 
     class Sweeper:
-        def sweep_source(self, tenant_id, source, live_source_docs, complete):
-            swept.append((tenant_id, source))
+        def sweep_source(self, tenant_id, source, live_source_docs, complete, user_id):
+            swept.append((tenant_id, source, user_id))
             return SimpleNamespace(tenant_id=tenant_id, source=source)
 
     monkeypatch.setattr(scheduler_module, "LiveSourceLister", Lister)
@@ -138,7 +138,7 @@ def test_scheduled_sweeps_skip_connections_saved_outside_a_workspace(monkeypatch
     )
 
     assert len(scheduler.sweep_all()) == 1
-    assert swept == [(WORKSPACE, "gdrive")]
+    assert swept == [(WORKSPACE, "gdrive", MEMBER)]  # compared with that rep's documents only
 
 
 class _Worker:

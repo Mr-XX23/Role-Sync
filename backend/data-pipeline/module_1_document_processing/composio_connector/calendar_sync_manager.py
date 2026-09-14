@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
+from module_1_document_processing.connector_privacy import document_id
 from module_1_document_processing.composio_connector.composio_client import ComposioClient
 from module_1_document_processing.composio_connector.calendar_models import (
     CalendarConnection,
@@ -619,7 +620,7 @@ class CalendarSyncManager:
 
             # Record Synced Event Lineage
             rec = SyncedEventRecord(
-                doc_id=f"{canonical_event.tenant_id}:{canonical_event.source}:{canonical_event.external_id}",
+                doc_id=document_id(canonical_event.tenant_id, canonical_event.source, canonical_event.user_id, canonical_event.external_id),
                 tenant_id=conn.tenant_id,
                 connection_id=conn.connection_id,
                 event_id=event_id,
@@ -790,18 +791,8 @@ class CalendarSyncManager:
         if user_id:
             conn = self.store.get_or_create_connection(tenant_id=event.tenant_id, user_id=user_id)
 
-        # Fallback to active connection if user_id wasn't in event or webhook is disabled on retrieved connection
-        if not conn or not getattr(conn.config, "webhook_enabled", False):
-            active_conns = self.store.list_all_active_connections()
-            wh_conns = [c for c in active_conns if getattr(c.config, "webhook_enabled", False)]
-            if wh_conns:
-                conn = wh_conns[0]
-                user_id = conn.user_id
-                event.user_id = user_id
-            elif active_conns:
-                conn = active_conns[0]
-                user_id = conn.user_id
-                event.user_id = user_id
+        # Only this rep's connection: synced documents are private to their rep, so an event is never
+        # attributed to someone else's connection just because theirs is the one with webhooks on.
 
         if not conn or not getattr(conn.config, "webhook_enabled", False):
             print(f"[CalendarSyncManager] Webhook: triggers are disabled for user={conn.user_id if conn else 'unknown'}. Skipping event.")

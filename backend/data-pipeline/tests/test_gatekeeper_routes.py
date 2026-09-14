@@ -37,13 +37,17 @@ def store(monkeypatch):
     store = GatekeeperStore(use_db=False)
     monkeypatch.setattr(gatekeeper_routes, "gatekeeper_store", store)
 
-    store.hold(KIND_REJECTED, make_doc(doc_id=HELD_DOC, tenant_id=WORKSPACE), "repetitive noise", ttl_days=30)
+    held = make_doc(doc_id=HELD_DOC, tenant_id=WORKSPACE)
+    held.source = "USER_UPLOAD"  # an upload is the workspace's to review; a synced document only its rep's
+    store.hold(KIND_REJECTED, held, "repetitive noise", ttl_days=30)
     store.record_decision(
         doc_id=HELD_DOC, tenant_id=WORKSPACE, user_id=OWNER, source="USER_UPLOAD",
         category="general_doc", decision=DECISION_REJECTED_LEXICAL, reason="repetitive noise",
     )
     # Another workspace's document, which must never be visible here.
-    store.hold(KIND_QUARANTINED, make_doc(doc_id=FOREIGN_DOC, tenant_id=OTHER_WORKSPACE), "low utility", ttl_days=90)
+    foreign = make_doc(doc_id=FOREIGN_DOC, tenant_id=OTHER_WORKSPACE)
+    foreign.source = "USER_UPLOAD"
+    store.hold(KIND_QUARANTINED, foreign, "low utility", ttl_days=90)
     store.record_decision(
         doc_id=FOREIGN_DOC, tenant_id=OTHER_WORKSPACE, user_id=OUTSIDER, source="USER_UPLOAD",
         category="general_doc", decision=DECISION_ACCEPTED, reason="ok",
