@@ -100,12 +100,20 @@ public class WorkspaceProfile {
     @Column(name = "bio", columnDefinition = "TEXT")
     private String bio;
 
+    // Profile saves, and profile photo changes, in their current 24-hour windows (see ProfileChangeLimits).
     @Column(name = "daily_update_count")
     @Builder.Default
     private Integer dailyUpdateCount = 0;
 
     @Column(name = "update_window_start")
     private LocalDateTime updateWindowStart;
+
+    @Column(name = "avatar_change_count")
+    @Builder.Default
+    private Integer avatarChangeCount = 0;
+
+    @Column(name = "avatar_window_start")
+    private LocalDateTime avatarWindowStart;
 
     /**
      * The account was created by a workspace admin rather than by the person signing up. Such a
