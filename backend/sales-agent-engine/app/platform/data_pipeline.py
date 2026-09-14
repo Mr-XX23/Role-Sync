@@ -1,4 +1,4 @@
-"""data-pipeline over HTTP: the knowledge vault and the product catalog (one service).
+"""data-pipeline over HTTP: the knowledge vault, the product catalog and the rep's connected apps (one service).
 
 The engine calls it inside the platform network, where data-pipeline trusts ``X-User-Id``
 (outside, the gateway sets it from a verified token), so every call carries the verified
@@ -323,6 +323,37 @@ class DataPipelineClient:
         return await self._send(
             "POST", f"/api/v1/catalog/inventory/release/{quote(reservation_id, safe='')}", user_id, tenant_id=tenant_id
         )
+
+    # ------------------------------------------------------------------ connected apps
+    # The rep's own connections in this workspace. ``source`` is data-pipeline's name for the app:
+    # gmail, gdrive, calendar, slack or notion.
+    async def connector_status(self, user_id: UUID, tenant_id: UUID) -> dict[str, dict[str, Any]]:
+        """Each app's connection, keyed by source: status, config, backfill state, lock, last sync."""
+        body = await self._get("/api/v1/connectors/status", user_id, tenant_id=tenant_id)
+        connections = body.get("connections") if isinstance(body, dict) else None
+        return {str(key): value for key, value in (connections or {}).items() if isinstance(value, dict)}
+
+    async def connector_activities(self, user_id: UUID, tenant_id: UUID, source: str, *, limit: int) -> list[dict[str, Any]]:
+        """Recent syncs of one app, newest first."""
+        body = await self._get(f"/api/v1/connectors/{source}/activities", user_id, tenant_id=tenant_id, params={"limit": limit})
+        activities = body.get("activities") if isinstance(body, dict) else None
+        return [activity for activity in activities or [] if isinstance(activity, dict)]
+
+    async def start_connector_sync(self, user_id: UUID, tenant_id: UUID, source: str) -> dict[str, Any]:
+        """Starts a sync in the background (409 while one runs)."""
+        return await self._send("POST", f"/api/v1/connectors/{source}/sync-now", user_id, tenant_id=tenant_id, empty_ok=True)
+
+    async def save_connector_config(self, user_id: UUID, tenant_id: UUID, source: str, config: dict[str, Any]) -> dict[str, Any]:
+        """Replaces the app's whole sync configuration (fields not sent fall back to defaults) and starts a sync."""
+        return await self._send("POST", f"/api/v1/connectors/{source}/config", user_id, tenant_id=tenant_id, json=config, empty_ok=True)
+
+    async def set_connector_schedule(self, user_id: UUID, tenant_id: UUID, source: str, schedule: dict[str, Any]) -> dict[str, Any]:
+        """``{sync_frequency, interval_minutes, auto_sync_enabled, webhook_enabled}``."""
+        return await self._send("POST", f"/api/v1/connectors/{source}/auto-sync", user_id, tenant_id=tenant_id, json=schedule, empty_ok=True)
+
+    async def disconnect_connector(self, user_id: UUID, tenant_id: UUID, source: str) -> dict[str, Any]:
+        """Signs RoleSync out of the app for this user (in every workspace); synced documents are kept."""
+        return await self._send("POST", f"/api/v1/connectors/{source}/disconnect", user_id, tenant_id=tenant_id, empty_ok=True)
 
     # ------------------------------------------------------------------ transport
     async def _get(

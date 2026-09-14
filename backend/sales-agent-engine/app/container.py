@@ -53,6 +53,7 @@ from app.skills.store import SkillStore
 from app.tools.adapters.catalog import catalog_tools
 from app.tools.adapters.catalog_setup import catalog_setup_tools
 from app.tools.adapters.catalog_writes import catalog_write_tools
+from app.tools.adapters.connectors import connector_tools
 from app.tools.adapters.deals import deal_tools
 from app.tools.adapters.documents import document_tools
 from app.tools.adapters.gmail import gmail_tools
@@ -179,6 +180,7 @@ def default_registry(
         *catalog_tools(data_pipeline),
         *catalog_write_tools(data_pipeline, workspaces),
         *catalog_setup_tools(data_pipeline, workspaces),
+        *connector_tools(data_pipeline, connector, workspaces),
         *deal_tools(deals, workspaces),
         *profile_tools(ProfileClient(base_url=settings.workspace_service_url, http=http), rep_profiles),
     ]

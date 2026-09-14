@@ -83,16 +83,20 @@ def test_every_write_tool_shows_the_reviewer_a_preview_and_says_how_to_undo_it()
         "add_web_page_to_knowledge_base", "update_knowledge_document", "reclassify_knowledge_document",
         "reindex_knowledge_document", "delete_knowledge_document", "save_catalog_category", "delete_catalog_category",
         "create_stock_location", "update_stock_location", "delete_stock_location", "add_catalog_skus", "restore_catalog_item",
-        "update_my_profile", "update_my_preferences",
+        "update_my_profile", "update_my_preferences", "sync_app_now", "change_app_sync_settings", "set_app_auto_sync",
+        "disconnect_app",
     }
     assert all(d.preview is not None for d in writes.values())
     # Only these can't be reversed: a sent email, a released reservation, an undo itself, and indexing a document
     # again (nothing to put back). A stock movement has an undo handler for shipments, and deleting a document one
     # for web pages (added again from their address); other movements and deleted files report that they can't be.
+    # A sync can't be taken back, and a disconnected app needs the rep to sign in again in a browser.
     assert {name for name, d in writes.items() if d.undo_handler is None} == {
-        "send_email", "release_stock", "undo_actions", "reindex_knowledge_document"
+        "send_email", "release_stock", "undo_actions", "reindex_knowledge_document", "sync_app_now", "disconnect_app"
     }
-    assert {name for name, d in writes.items() if d.irreversible} == {"send_email", "undo_actions", "delete_knowledge_document"}
+    assert {name for name, d in writes.items() if d.irreversible} == {
+        "send_email", "undo_actions", "delete_knowledge_document", "disconnect_app"
+    }
 
 
 def test_sub_agent_scopes_stay_narrow_over_the_full_tool_set():
@@ -129,6 +133,12 @@ def test_sub_agent_scopes_stay_narrow_over_the_full_tool_set():
     assert not profile & {d.name for agent in ("research", "outreach", "quote") for d in scopes.tools_for(agent, registry)}
     assert profile <= {d.name for d in scopes.tools_for("orchestrator", registry)}
     assert all("get_my_profile" in {d.name for d in scopes.tools_for(agent, registry)} for agent in ("research", "outreach", "quote"))
+    # Every agent can see the rep's connected apps; only the coordinator syncs, reconfigures or disconnects them.
+    connectors = {d.name for d in registry.all() if d.scope is ToolScope.CONNECTORS}
+    assert connectors == {"sync_app_now", "change_app_sync_settings", "set_app_auto_sync", "disconnect_app"}
+    assert not connectors & {d.name for agent in ("research", "outreach", "quote") for d in scopes.tools_for(agent, registry)}
+    assert connectors <= {d.name for d in scopes.tools_for("orchestrator", registry)}
+    assert {"list_connected_apps", "get_app_sync_history"} <= {d.name for d in scopes.tools_for("research", registry)}
     assert {"list_catalog_items", "get_catalog_item", "describe_catalog", "list_stock_reservations"} <= {
         d.name for d in scopes.tools_for("research", registry)
     }

@@ -98,6 +98,9 @@ outcome is unknown (timeout, dropped connection) is reported as UNKNOWN and neve
 | `update_deal` | write (approval): only the fields it names; re-applies over a concurrent edit; undo restores only fields nobody touched since | workspace-service deals |
 | `update_my_profile` | write (coordinator only): only the fields it names, in one save; refused before approval when the rep has no profile save left (24 every 24 hours); undo puts back the fields nobody changed since, and uses a save too | workspace-service profile |
 | `update_my_preferences` | write (coordinator only): time zone, language, theme; no limit; undo puts back the previous values | workspace-service preferences |
+| `sync_app_now` | write (coordinator only): start a sync of a connected app; refused before approval when the app isn't really connected (Composio ACTIVE), isn't set up or is already syncing; can't be undone | data-pipeline connectors |
+| `change_app_sync_settings`, `set_app_auto_sync` | write (coordinator only): per-sync limit, days back, what to sync (Gmail one label; Slack, Notion kinds; not Calendar or Drive, which data-pipeline doesn't filter), or the schedule (off, 30 min, 1 h, 6 h, daily); settings are sent whole so auto-sync isn't switched off, and saving starts a sync; undo puts back the previous values | data-pipeline connectors |
+| `disconnect_app` | write (coordinator only), can't be undone: signs RoleSync out of the app in every workspace and stops the agent's own tools for it; synced documents stay | data-pipeline connectors (Composio) |
 | `remember`, `forget` | memory: saved and deleted without approval, audited; shared memory is closed to viewers | engine `agent.memory` |
 | `undo_actions` | write: undo completed actions of the session, newest first (orchestrator only) | each tool's own undo handler |
 | `search_emails`, `read_email_thread` | read | Composio Gmail |
@@ -114,6 +117,7 @@ outcome is unknown (timeout, dropped connection) is reported as UNKNOWN and neve
 | `research_prospect` | read | web search, condensed into a cited brief by the low-complexity route (OpenRouter) |
 | `delegate` | hands a piece of work to a sub-agent (the coordinator only); no approval, audited | the engine's own sub-agents |
 | `search_deals` | read | workspace-service deals |
+| `list_connected_apps`, `get_app_sync_history` | read: each app's connection, schedule, what it syncs and how much; recent syncs with what failed | data-pipeline connectors, Composio (whether an account is ACTIVE) |
 | `get_my_profile` | read: the rep's whole profile (contact details and links too), settings, and the profile saves and photo changes they have left | workspace-service profile |
 | `recall` | read | engine `agent.memory` |
 | `read_offloaded_result` | read: any part of a result too large to keep in the prompt, or passages matching a phrase | engine `agent.context_blob` |
@@ -122,8 +126,8 @@ Connector tools are denied (not failed) when the user hasn't connected that app.
 `sources` (web pages, message and page links, or links to what a write created), which the chat UI
 shows under each step. Catalog, stock and knowledge-base writes are denied to workspace viewers;
 knowledge-base writes need the KNOWLEDGE scope and catalog setup (categories, locations, SKUs of existing
-items, restoring items) the CATALOG_SETUP scope, and changes to the rep's profile and settings the PROFILE scope, which
-no sub-agent has. Every executed write's result
+items, restoring items) the CATALOG_SETUP scope, and changes to the rep's profile and settings the PROFILE scope, and syncing,
+configuring or disconnecting the rep's apps the CONNECTORS scope, which no sub-agent has. Every executed write's result
 includes an `action_id`, which `undo_actions` takes.
 
 ## Guardrails
