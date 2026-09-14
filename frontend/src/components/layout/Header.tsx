@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Search, Menu, ChevronDown, Building2, Check } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../store';
-import { setModalOpen } from '../../store/taskSlice';
+// import { setModalOpen } from '../../store/taskSlice'; // hidden for now (Deploy Agent button)
 import { rememberWorkspace, setCurrentWorkspace } from '../../store/workspaceSlice';
 import { ThemeToggle } from '../ThemeToggle';
 import { DashboardSwitch } from './DashboardSwitch';
@@ -48,13 +48,15 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Workspace dashboard ↔ Super Admin Console (platform super admins only) */}
         <DashboardSwitch />
 
-        {/* Live Vector Mesh Node Status */}
+        {/* Live Vector Mesh Node Status — hidden for now */}
+        {/*
         <div className="hidden xl:flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 rounded-full border border-emerald-500/25">
           <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
           <span className="font-mono text-[9px] text-emerald-700 dark:text-emerald-400 font-bold uppercase tracking-wider">
             pgvector Node: ACTIVE
           </span>
         </div>
+        */}
 
         {/* Workspace Switcher (only for people in more than one workspace) */}
         {workspaces.length > 1 && currentWorkspace && (
@@ -115,13 +117,15 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         )}
 
-        {/* Deploy Trigger */}
+        {/* Deploy Trigger — hidden for now */}
+        {/*
         <button
           onClick={() => dispatch(setModalOpen(true))}
           className="hidden lg:block text-primary font-bold text-xs bg-primary/10 border border-primary/20 px-3.5 py-1.5 rounded-xl hover:bg-primary/20 active:scale-95 transition-all cursor-pointer shadow-2xs"
         >
           Deploy Agent
         </button>
+        */}
 
         {/* Theme Mode Selector */}
         <ThemeToggle />

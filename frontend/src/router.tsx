@@ -15,8 +15,9 @@ import { OnboardingGuard } from './components/guards/OnboardingGuard';
 import OnboardingWizard from './pages/auth/OnboardingWizard';
 import { KnowledgeVault } from './pages/salemans/knowledgeVault/KnowledgeVault';
 import { ExternalConnector } from './pages/salemans/externalConnector/ExternalConnector';
-import { AiTasks } from './pages/salemans/AiTasks';
-import { Workspace } from './pages/salemans/Workspace';
+// Hidden for now: Agent Manager and Workspace pages.
+// import { AiTasks } from './pages/salemans/AiTasks';
+// import { Workspace } from './pages/salemans/Workspace';
 import { Settings } from './pages/salemans/Settings';
 import { Support } from './pages/salemans/Support';
 import { Profile } from './pages/salemans/Profile';
@@ -156,14 +157,15 @@ export const router = createBrowserRouter([
         path: 'external-connector',
         element: <ExternalConnector />,
       },
-      {
-        path: 'ai-tasks',
-        element: <AiTasks />,
-      },
-      {
-        path: 'workspace',
-        element: <Workspace />,
-      },
+      // Hidden for now: Agent Manager and Workspace routes.
+      // {
+      //   path: 'ai-tasks',
+      //   element: <AiTasks />,
+      // },
+      // {
+      //   path: 'workspace',
+      //   element: <Workspace />,
+      // },
       {
         path: 'users',
         element: <UserManagement />,
