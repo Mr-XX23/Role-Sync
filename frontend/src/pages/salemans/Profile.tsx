@@ -5,9 +5,11 @@ import {
   updateProfile, 
   uploadAvatar,
   uploadAvatarUrl,
+  fetchProfileLimits,
   fetchWorkspaces, 
   updateWorkspaceDetails
 } from '../../store/workspaceSlice';
+import type { ProfileAllowance } from '../../store/workspaceSlice';
 import { useToast } from '../../context/ToastContext';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
@@ -84,11 +86,38 @@ const sanitizeInputString = (val: string | undefined | null): string => {
     .replace(/data:/gi, '');
 };
 
+/** When an allowance is back, in the viewer's time: "14:32", or "Tue 14:32" when that isn't today. */
+const whenBack = (resetsAt: string | null): string => {
+  const date = resetsAt ? new Date(resetsAt) : null;
+  if (!date || Number.isNaN(date.getTime())) return '';
+  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return date.toDateString() === new Date().toDateString() ? time : `${date.toLocaleDateString([], { weekday: 'short' })} ${time}`;
+};
+
+const photoLimitText = (photos: ProfileAllowance): string =>
+  `You can change your photo ${photos.limit} times every 24 hours` +
+  (photos.resets_at ? `. The next change is possible at ${whenBack(photos.resets_at)}.` : '.');
+
+/** Next to a Save button: how many profile saves are left in the 24-hour window. */
+const SavesLeft: React.FC<{ saves: ProfileAllowance | undefined }> = ({ saves }) =>
+  saves ? (
+    <span
+      className={`text-[11px] font-mono ${saves.remaining === 0 ? 'text-destructive' : 'text-muted-foreground'}`}
+      title={`Up to ${saves.limit} profile saves every 24 hours. The count starts again 24 hours after the first save.`}
+    >
+      {saves.remaining === 0 ? `No saves left until ${whenBack(saves.resets_at)}` : `${saves.remaining} of ${saves.limit} saves left`}
+    </span>
+  ) : null;
+
 export const Profile: React.FC = () => {
   const dispatch = useAppDispatch();
   const toast = useToast();
-  const { profile, isLoading, workspaces, currentWorkspace } = useAppSelector((state) => state.workspace);
+  const { profile, isLoading, workspaces, currentWorkspace, profileLimits } = useAppSelector((state) => state.workspace);
   const { user } = useAppSelector((state) => state.auth);
+  const saves = profileLimits?.profile_saves;
+  const photos = profileLimits?.photo_changes;
+  const noSaveLeft = saves?.remaining === 0;
+  const noPhotoChangeLeft = photos?.remaining === 0;
 
   const [activeTab, setActiveTab] = useState<'bio' | 'ai-context' | 'workspace' | 'connected'>('bio');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -145,6 +174,7 @@ export const Profile: React.FC = () => {
   // Initial load
   useEffect(() => {
     dispatch(fetchProfile());
+    dispatch(fetchProfileLimits());
     dispatch(fetchWorkspaces());
   }, [dispatch]);
 
@@ -325,6 +355,12 @@ export const Profile: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (photos && noPhotoChangeLeft) {
+      toast.error(photoLimitText(photos), 'Photo Limit Reached');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
     const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/jpg'];
     if (!allowedTypes.includes(file.type.toLowerCase())) {
       toast.error('Invalid image format. Please select a JPEG, PNG, WebP, or GIF image.', 'Invalid Format');
@@ -364,7 +400,14 @@ export const Profile: React.FC = () => {
     } finally {
       setIsUploadingAvatar(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+      dispatch(fetchProfileLimits());
     }
+  };
+
+  /** Whether a refused photo change was refused because none is left (asks the server again). */
+  const photoLimitReached = async (): Promise<boolean> => {
+    const result = await dispatch(fetchProfileLimits());
+    return fetchProfileLimits.fulfilled.match(result) && result.payload.photo_changes.remaining === 0;
   };
 
   // Host external URL (Preset or direct URL) permanently
@@ -374,6 +417,11 @@ export const Profile: React.FC = () => {
 
     if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
       toast.error('Image URL must start with http:// or https://', 'Invalid URL');
+      return;
+    }
+
+    if (photos && noPhotoChangeLeft && cleanUrl !== (profile?.avatarUrl || '')) {
+      toast.error(photoLimitText(photos), 'Photo Limit Reached');
       return;
     }
 
@@ -394,6 +442,7 @@ export const Profile: React.FC = () => {
         const permanentUrl = resultAction.payload.avatar_url;
         setAvatarUrl(permanentUrl);
         toast.success('Profile avatar updated successfully.', 'Avatar Updated');
+        dispatch(fetchProfileLimits());
         if (fieldErrors.avatarUrl) {
           setFieldErrors(prev => {
             const updated = { ...prev };
@@ -401,6 +450,9 @@ export const Profile: React.FC = () => {
             return updated;
           });
         }
+      } else if (await photoLimitReached()) {
+        // Saving the link instead would be refused for the same reason.
+        toast.error((resultAction.payload as string) || 'Profile photo limit reached.', 'Photo Limit Reached');
       } else {
         // Graceful fallback: Still set the URL so preset/direct link displays and can be saved
         setAvatarUrl(cleanUrl);
@@ -611,6 +663,7 @@ export const Profile: React.FC = () => {
         const errorMsg = (resultAction.payload as string) || 'Failed to save profile changes.';
         toast.error(errorMsg, 'Save Failed');
       }
+      dispatch(fetchProfileLimits());
     } catch (err: any) {
       toast.error(err.message || 'An unexpected error occurred while saving.', 'Save Error');
     }
@@ -684,12 +737,18 @@ export const Profile: React.FC = () => {
                 )}
               </div>
 
-              <label 
+              <label
                 htmlFor="avatar-file-input"
+                onClick={(e) => {
+                  if (photos && noPhotoChangeLeft) {
+                    e.preventDefault(); // don't open the file picker for a photo that can't be saved
+                    toast.error(photoLimitText(photos), 'Photo Limit Reached');
+                  }
+                }}
                 className={`absolute -bottom-2 -right-2 p-2 bg-primary text-primary-foreground rounded-xl shadow-md cursor-pointer hover:opacity-90 active:scale-95 transition-all z-30 ${
-                  isUploadingAvatar ? 'pointer-events-none opacity-50' : ''
+                  isUploadingAvatar ? 'pointer-events-none opacity-50' : noPhotoChangeLeft ? 'opacity-50' : ''
                 }`}
-                title="Upload Photo"
+                title={photos ? `Upload Photo (${photos.remaining} of ${photos.limit} photo changes left)` : 'Upload Photo'}
               >
                 {isUploadingAvatar ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />}
                 <input 
@@ -743,6 +802,15 @@ export const Profile: React.FC = () => {
                     </span>
                   )}
                 </div>
+              )}
+
+              {saves && photos && (
+                <p
+                  className="text-[10px] font-mono text-muted-foreground pt-1"
+                  title={`Up to ${saves.limit} profile saves and ${photos.limit} photo changes every 24 hours. Each count starts again 24 hours after its first change.`}
+                >
+                  Profile saves left: {saves.remaining}/{saves.limit} · Photo changes left: {photos.remaining}/{photos.limit}
+                </p>
               )}
             </div>
           </div>
@@ -990,10 +1058,11 @@ export const Profile: React.FC = () => {
                   )}
                 </div>
 
-                <div className="pt-2 flex justify-end">
+                <div className="pt-2 flex items-center justify-end gap-3">
+                  <SavesLeft saves={saves} />
                   <Button
                     type="submit"
-                    disabled={!isBioTabDirty || isLoading || isUploadingAvatar}
+                    disabled={!isBioTabDirty || isLoading || isUploadingAvatar || noSaveLeft}
                     isLoading={isLoading}
                     loadingText="Saving..."
                     icon={<Save className="w-4 h-4" />}
@@ -1241,10 +1310,11 @@ export const Profile: React.FC = () => {
                 </div>
               </div>
 
-              <div className="pt-2 flex justify-end">
+              <div className="pt-2 flex items-center justify-end gap-3">
+                <SavesLeft saves={saves} />
                 <Button
                   type="submit"
-                  disabled={!isAiContextTabDirty || isLoading}
+                  disabled={!isAiContextTabDirty || isLoading || noSaveLeft}
                   isLoading={isLoading}
                   loadingText="Saving..."
                   icon={<Save className="w-4 h-4" />}
@@ -1654,10 +1724,11 @@ export const Profile: React.FC = () => {
               />
             </div>
 
-            <div className="pt-2 flex justify-end">
+            <div className="pt-2 flex items-center justify-end gap-3">
+              <SavesLeft saves={saves} />
               <Button
                 type="submit"
-                disabled={!isConnectedTabDirty || isLoading}
+                disabled={!isConnectedTabDirty || isLoading || noSaveLeft}
                 isLoading={isLoading}
                 loadingText="Saving..."
                 icon={<Save className="w-4 h-4" />}

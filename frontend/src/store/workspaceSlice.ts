@@ -65,6 +65,20 @@ export interface WorkspacePreferences {
   timezone: string;
 }
 
+/** One allowance: workspace-service allows 24 profile saves and 3 photo changes every 24 hours. */
+export interface ProfileAllowance {
+  limit: number;
+  used: number;
+  remaining: number;
+  window_hours: number;
+  resets_at: string | null; // when the whole allowance is back; null while none of it is used
+}
+
+export interface ProfileLimits {
+  profile_saves: ProfileAllowance;
+  photo_changes: ProfileAllowance;
+}
+
 export interface OnboardingStateSchema {
   stateId: string;
   currentStep: string;
@@ -75,6 +89,7 @@ export interface OnboardingStateSchema {
 interface WorkspaceState {
   profile: WorkspaceProfile | null;
   preferences: WorkspacePreferences | null;
+  profileLimits: ProfileLimits | null;
   onboarding: OnboardingStateSchema | null;
   workspaces: WorkspaceItem[];
   currentWorkspace: WorkspaceItem | null;
@@ -89,6 +104,7 @@ interface WorkspaceState {
 const initialState: WorkspaceState = {
   profile: null,
   preferences: null,
+  profileLimits: null,
   onboarding: null,
   workspaces: [],
   currentWorkspace: null,
@@ -197,7 +213,7 @@ export const updateProfile = createAsyncThunk(
     } catch (error: any) {
       if (error.response?.status === 429) {
         return rejectWithValue(
-          error.response?.data?.message || 'Profile update limit reached. You can only update your profile 2 times every 24 hours.'
+          error.response?.data?.message || 'Profile update limit reached. You can update your profile 24 times every 24 hours.'
         );
       }
       return rejectWithValue(
@@ -269,6 +285,20 @@ export const updateWorkspaceDetails = createAsyncThunk(
       return rejectWithValue(
         error.response?.data?.message || 'Failed to update workspace details'
       );
+    }
+  }
+);
+
+/** How many profile saves and photo changes are left in their 24-hour windows. */
+export const fetchProfileLimits = createAsyncThunk(
+  'workspace/fetchProfileLimits',
+  async (_, { rejectWithValue }) => {
+    try {
+      const response = await api.get<ProfileLimits>('/workspaces/profile/limits');
+      return response.data;
+    } catch (error) {
+      const message = (error as { response?: { data?: { message?: string } } }).response?.data?.message;
+      return rejectWithValue(message || 'Failed to fetch profile limits');
     }
   }
 );
@@ -345,6 +375,7 @@ const workspaceSlice = createSlice({
     clearWorkspaceState: (state) => {
       state.profile = null;
       state.preferences = null;
+      state.profileLimits = null;
       state.onboarding = null;
       state.workspaces = [];
       state.currentWorkspace = null;
@@ -467,6 +498,10 @@ const workspaceSlice = createSlice({
       .addCase(fetchPreferences.rejected, (state, action) => {
         state.isLoading = false;
         state.error = action.payload as string;
+      })
+      // fetchProfileLimits (no loading flag: it refreshes quietly after every save)
+      .addCase(fetchProfileLimits.fulfilled, (state, action: PayloadAction<ProfileLimits>) => {
+        state.profileLimits = action.payload;
       })
       // updateThemePreference
       .addCase(updateThemePreference.fulfilled, (state, action: PayloadAction<WorkspacePreferences>) => {

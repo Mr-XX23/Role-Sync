@@ -81,6 +81,9 @@ const TOOL_LABEL: Record<string, string> = {
   search_deals: 'Search deals',
   create_deal: 'Create deal',
   update_deal: 'Update deal',
+  get_my_profile: 'Read your profile',
+  update_my_profile: 'Update your profile',
+  update_my_preferences: 'Change your settings',
   remember: 'Remember',
   recall: 'Recall',
   forget: 'Forget',
@@ -114,6 +117,8 @@ const WRITE_TOOLS = new Set([
   'reclassify_knowledge_document',
   'reindex_knowledge_document',
   'delete_knowledge_document',
+  'update_my_profile',
+  'update_my_preferences',
 ]);
 const MEMORY_TOOLS = new Set(['remember', 'forget']);
 /** Handing part of the job to a sub-agent; its own steps stream in under its name. */
@@ -148,6 +153,7 @@ const WHERE_TO_CHECK: Record<string, string> = {
   correct_stock_count: ' (check the stock history in Product Management)',
   reserve_stock: ' (check the stock reservations)',
   release_stock: ' (check the stock reservations)',
+  update_my_profile: ' (check your Profile page)',
 };
 
 function describeResult(item: TranscriptItem): string | null | undefined {
@@ -257,6 +263,17 @@ function describeCall(item: TranscriptItem): string {
       return [args.title, args.company].filter(Boolean).map(String).join(' · ');
     case 'update_deal':
       return args.stage ? `stage → ${String(args.stage)}` : '';
+    case 'update_my_profile':
+      // Unset fields may arrive as null: name only the ones being changed.
+      return Object.keys(args)
+        .filter((field) => args[field] !== null && args[field] !== undefined)
+        .map((field) => field.replace(/_url$/, '').replace(/_/g, ' '))
+        .join(', ');
+    case 'update_my_preferences':
+      return Object.entries(args)
+        .filter(([, value]) => value !== null && value !== undefined)
+        .map(([field, value]) => `${field.replace(/_/g, ' ')} → ${String(value)}`)
+        .join(', ');
     case 'remember':
       return args.fact ? `“${String(args.fact)}”` : '';
     case 'recall': {
@@ -268,6 +285,7 @@ function describeCall(item: TranscriptItem): string {
     case 'retire_catalog_item':
     case 'restore_catalog_item':
     case 'describe_catalog':
+    case 'get_my_profile':
     case 'release_stock':
     case 'forget':
     case 'read_offloaded_result':
