@@ -1,4 +1,4 @@
-"""An in-memory data-pipeline (catalog, inventory, knowledge vault) behind an httpx
+"""An in-memory data-pipeline (catalog, inventory, knowledge vault, connected apps) behind an httpx
 MockTransport, answering like the real routes the engine's write tools use."""
 
 from __future__ import annotations
@@ -25,6 +25,20 @@ VAULT_CATEGORIES = frozenset(
 )
 
 
+# What each connector's config route falls back to for a field it isn't sent (data-pipeline connector_routes.py).
+CONNECTOR_DEFAULTS: dict[str, dict[str, Any]] = {
+    source: {limit: amount, "categories": categories, "sync_window_days": 180, "auto_sync_interval_minutes": 0,
+             "sync_frequency": "off", "auto_sync_enabled": False, "webhook_enabled": False, **extra}
+    for source, limit, amount, categories, extra in (
+        ("gmail", "max_emails_per_sync", 10, ["INBOX"], {}),
+        ("gdrive", "max_files_per_sync", 10, ["MY_DRIVE"], {}),
+        ("calendar", "max_events_per_sync", 10, ["PRIMARY"], {"future_window_days": 365}),
+        ("slack", "max_messages_per_sync", 15, ["PUBLIC_CHANNELS", "DIRECT_MESSAGES", "GROUP_MESSAGES"], {}),
+        ("notion", "max_records_per_sync", 15, ["PAGES", "DATABASES"], {}),
+    )
+}
+
+
 def _json(status: int, body: Any) -> httpx.Response:
     return httpx.Response(status, json=body)
 
@@ -44,6 +58,9 @@ class FakeDataPipeline:
     stock: dict[tuple[str, str], dict[str, int]] = field(default_factory=dict)  # (variant id, location id)
     reservations: dict[str, dict[str, Any]] = field(default_factory=dict)
     documents: dict[str, dict[str, Any]] = field(default_factory=dict)
+    connections: dict[str, dict[str, Any]] = field(default_factory=dict)  # source → its status, as /connectors/status shows it
+    connector_history: dict[str, list[dict[str, Any]]] = field(default_factory=dict)  # source → activities, newest first
+    syncs_started: list[str] = field(default_factory=list)
     requests: list[tuple[str, str, Any]] = field(default_factory=list)
     failures: dict[tuple[str, str], int] = field(default_factory=dict)  # (METHOD, path) → status, once
     forbid_writes: bool = False
@@ -153,6 +170,22 @@ class FakeDataPipeline:
         }
         self.products[product_id] = product
         return product
+
+    def add_connection(self, source: str, *, status: str = "Up to Date", locked: bool = False, synced: int = 0,
+                       progress: str = "", **config: Any) -> dict[str, Any]:
+        """A connection of the caller in this workspace, with config fields replaced as given."""
+        connection = self._connection(source)
+        connection.update(status=status, current_progress=progress, lock={"is_locked": locked},
+                          backfill_state={"total_synced_so_far": synced})
+        connection["config"].update(config)
+        return connection
+
+    def _connection(self, source: str) -> dict[str, Any]:
+        return self.connections.setdefault(source, {
+            "connection_id": f"conn_{source}", "status": "Available", "config": dict(CONNECTOR_DEFAULTS[source]),
+            "backfill_state": {"total_synced_so_far": 0}, "lock": {"is_locked": False}, "current_progress": "",
+            "last_successful_sync_at": "2026-09-15T08:00:00+00:00",
+        })
 
     def _now(self) -> str:
         self._ticks = getattr(self, "_ticks", 0) + 1
@@ -265,6 +298,8 @@ class FakeDataPipeline:
             return _detail(404, f"{exc} not found")
 
     def _route(self, method: str, path: str, body: Any, request: httpx.Request) -> httpx.Response:
+        if path.startswith("/api/v1/connectors/"):
+            return self._connectors(method, path.removeprefix("/api/v1/connectors/"), body, request)
         catalog = "/api/v1/catalog"
         if path == f"{catalog}/categories" and method == "GET":
             return _json(200, [self._category(key) for key in sorted(self.categories)])
@@ -448,6 +483,37 @@ class FakeDataPipeline:
         if path.startswith(_VAULT):
             return self._vault(method, path.removeprefix(_VAULT), body, request)
         return _detail(404, f"no route {method} {path}")
+
+    def _connectors(self, method: str, rest: str, body: Any, request: httpx.Request) -> httpx.Response:
+        """The connector routes the engine uses (data-pipeline composio_connector/connector_routes.py)."""
+        if rest == "status" and method == "GET":
+            return _json(200, {"status": "success", "connections": {source: self._connection(source) for source in CONNECTOR_DEFAULTS}})
+        source, _, action = rest.partition("/")
+        if source not in CONNECTOR_DEFAULTS:
+            return _detail(400, f"Unsupported source: {source}")
+        connection = self._connection(source)
+        if action == "activities" and method == "GET":
+            limit = int(request.url.params.get("limit", "20"))
+            return _json(200, {"status": "success", "source": source, "activities": self.connector_history.get(source, [])[:limit]})
+        if action == "sync-now" and method == "POST":
+            if connection["lock"]["is_locked"]:
+                return _detail(409, "A sync job is currently running. Please wait.")
+            self.syncs_started.append(source)
+            return _json(200, {"status": "started", "connection_id": connection["connection_id"]})
+        if action == "config" and method == "POST":
+            connection["config"] = {**CONNECTOR_DEFAULTS[source], **(body or {})}  # the whole config: unsent fields reset
+            self.syncs_started.append(source)  # saving starts a sync
+            return _json(200, {"status": "success", "message": "Configuration saved", "connection": connection})
+        if action == "auto-sync" and method == "POST":
+            connection["config"].update(
+                sync_frequency=body["sync_frequency"], auto_sync_interval_minutes=body.get("interval_minutes") or 0,
+                auto_sync_enabled=bool(body.get("auto_sync_enabled")), webhook_enabled=bool(body.get("webhook_enabled")),
+            )
+            return _json(200, {"status": "success", "connection": connection})
+        if action == "disconnect" and method == "POST":
+            connection["status"] = "Disconnected"
+            return _json(200, {"status": "success", "message": f"{source} disconnected. Synced memories preserved."})
+        return _detail(404, "Not Found")
 
     def _vault(self, method: str, path: str, body: Any, request: httpx.Request) -> httpx.Response:
         """The knowledge vault routes (data-pipeline knowledge_vault_routes.py)."""

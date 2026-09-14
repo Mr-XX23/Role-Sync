@@ -112,6 +112,10 @@ def describe_action(tool: str, args: Any) -> tuple[str, str]:
         "reclassify_knowledge_document": ("Classify a knowledge-base document again", "KNOWLEDGE_CHANGE"),
         "reindex_knowledge_document": ("Index a knowledge-base document again", "KNOWLEDGE_CHANGE"),
         "delete_knowledge_document": ("Delete a knowledge-base document", "KNOWLEDGE_CHANGE"),
+        "sync_app_now": (f"Sync {text('app')} now", "CONNECTOR_CHANGE"),
+        "change_app_sync_settings": (f"Change what {text('app')} syncs", "CONNECTOR_CHANGE"),
+        "set_app_auto_sync": (f"{text('app').capitalize()} auto-sync: {text('schedule')}", "CONNECTOR_CHANGE"),
+        "disconnect_app": (f"Disconnect {text('app')}", "CONNECTOR_CHANGE"),
         "update_my_profile": (
             "Update the rep's profile: " + ", ".join(str(key).replace("_", " ") for key in fields),
             "PROFILE_CHANGE",
