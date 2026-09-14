@@ -95,6 +95,7 @@ export const NAV_LINKS = [
   { label: 'Features', to: '/features' },
   { label: 'How it works', to: '/how-it-works' },
   { label: 'Integrations', to: '/integrations' },
+  { label: 'Pricing', to: '/pricing' },
   { label: 'About', to: '/about' },
   { label: 'Contact', to: '/contact' },
 ] as const;
@@ -468,7 +469,7 @@ export const INTEGRATIONS = [
 
 export const ROADMAP = [
   { icon: Orbit, title: 'Long-running goals', description: 'Autonomy that pursues multi-day objectives with escalation policies.' },
-  { icon: CircleDollarSign, title: 'Billing and credits', description: 'Usage credits with Stripe, eSewa and Khalti checkout.' },
+  { icon: CircleDollarSign, title: 'Local payment methods', description: 'eSewa and Khalti checkout for credit packs, alongside Stripe.' },
   { icon: GraduationCap, title: 'More personas', description: 'AI Tutor Console and Student Desk join the Salesman Engine.' },
   { icon: Activity, title: 'Audio and video transcription', description: 'Call recordings and demos become searchable knowledge.' },
 ];

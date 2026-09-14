@@ -3,6 +3,8 @@ import { Outlet, useLocation } from 'react-router-dom';
 import {
   Bot,
   Building2,
+  Coins,
+  CreditCard,
   Cpu,
   Gauge,
   LifeBuoy,
@@ -13,6 +15,7 @@ import {
   ScrollText,
   ShieldCheck,
   Users,
+  Wallet,
 } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import type { SidebarItem } from './Sidebar';
@@ -25,6 +28,9 @@ const ITEMS: SidebarItem[] = [
   { id: 'admin-overview', label: 'Overview', icon: Gauge, path: '/admin/overview' },
   { id: 'admin-users', label: 'Users', icon: Users, path: '/admin/users' },
   { id: 'admin-workspaces', label: 'Workspaces', icon: Building2, path: '/admin/workspaces' },
+  { id: 'admin-billing', label: 'Billing', icon: Wallet, path: '/admin/billing' },
+  { id: 'admin-credits', label: 'Credits', icon: Coins, path: '/admin/credits' },
+  { id: 'admin-payments', label: 'Payments', icon: CreditCard, path: '/admin/payments' },
   { id: 'admin-support', label: 'Support Tickets', icon: LifeBuoy, path: '/admin/support' },
   { id: 'admin-agents', label: 'Agent Manager', icon: Bot, path: '/admin/agents' },
   { id: 'admin-models', label: 'Models', icon: Cpu, path: '/admin/models' },
