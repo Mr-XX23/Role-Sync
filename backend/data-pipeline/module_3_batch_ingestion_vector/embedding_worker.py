@@ -10,6 +10,7 @@ try:
 except ImportError:  # requests is available in the service image; guard for safety
     requests = None
 
+from billing.metering import estimate_tokens, record_tokens
 from module_3_batch_ingestion_vector.chunker import TextNode
 
 # Google Generative Language API (Gemini) embeddings endpoint.
@@ -143,15 +144,16 @@ class EmbeddingWorker:
         max_attempts: Optional[int] = None,
     ) -> Optional[list[list[float]]]:
         url = f"{_GEMINI_BASE}/models/{self.api_model}:batchEmbedContents"
+        sent_texts = [(t or " ")[:8000] for t in texts]
         payload = {
             "requests": [
                 {
                     "model": f"models/{self.api_model}",
-                    "content": {"parts": [{"text": (t or " ")[:8000]}]},
+                    "content": {"parts": [{"text": text}]},
                     "task_type": task_type or self.task_type,
                     "output_dimensionality": self.dimension,
                 }
-                for t in texts
+                for text in sent_texts
             ]
         }
         attempts = max(1, max_attempts or self.max_attempts)
@@ -171,6 +173,15 @@ class EmbeddingWorker:
                         # it is treated as a failure rather than a partial result.
                         print(f"[EmbeddingWorker] Gemini returned {len(embeddings)} embeddings for {len(texts)} inputs.")
                         return None
+                    # batchEmbedContents reports no token counts, so the tokens are estimated from the
+                    # characters sent (3.5 per token, the sales-agent-engine's ratio). Only real
+                    # embeddings reach this point; pseudo-vectors never call the API and are not charged.
+                    record_tokens(
+                        self.api_model,
+                        estimate_tokens(sum(len(text) for text in sent_texts)),
+                        purpose="query_embedding" if (task_type or self.task_type) == "RETRIEVAL_QUERY" else "embedding",
+                        estimated=True,
+                    )
                     return [self._normalize([float(x) for x in (emb.get("values") or [])]) for emb in embeddings]
 
                 retryable = resp.status_code in _RETRYABLE_STATUS

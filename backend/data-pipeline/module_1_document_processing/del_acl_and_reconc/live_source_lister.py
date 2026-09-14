@@ -16,6 +16,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from billing.metering import record_composio_execution
+
 # Sources whose contents are a bounded, listable set. Mailboxes and chat
 # histories are unbounded streams: a partial page says nothing about deletion,
 # so they are never swept for tombstones.
@@ -86,7 +88,10 @@ class LiveSourceLister:
     def _execute(self, slug: str, arguments: dict[str, Any], user_id: str) -> Optional[dict[str, Any]]:
         self._last_error = None
         try:
-            res = self.composio._composio.tools.execute(
+            tools = self.composio._composio.tools
+            # Every listing page is a billable Composio execution (charged by the sweep as connector.sync).
+            record_composio_execution()
+            res = tools.execute(
                 slug=slug,
                 arguments=arguments,
                 user_id=user_id,

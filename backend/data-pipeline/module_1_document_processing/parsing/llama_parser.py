@@ -1,6 +1,7 @@
 import os
 import tempfile
 from typing import Any
+from billing.metering import count_llamaparse_pages, record_llamaparse_pages
 from module_1_document_processing.connector_privacy import document_id
 from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent
 from module_1_document_processing.parsing.parsed_document import ParsedDocument
@@ -68,6 +69,8 @@ class LlamaParserService:
                     os.unlink(tmp_path)
                 except Exception:
                     pass
+                # LlamaParse bills every page it parsed, blank or not, whatever happens to the text.
+                record_llamaparse_pages(count_llamaparse_pages(self.parser, documents))
 
                 parsed_text = "\n\n".join([doc.text for doc in documents if hasattr(doc, "text") and doc.text])
                 if parsed_text.strip():
@@ -129,6 +132,8 @@ class LlamaParserService:
                     os.unlink(tmp_path)
                 except Exception:
                     pass
+                # LlamaParse bills every page it parsed. Local parsers below never record pages.
+                record_llamaparse_pages(count_llamaparse_pages(self.parser, documents))
 
                 parsed_text = "\n\n".join([doc.text for doc in documents if hasattr(doc, "text")])
                 return ParsedDocument(

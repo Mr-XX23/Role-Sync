@@ -19,6 +19,9 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from billing.charges import charge_connector_sync
+from billing.metering import execution_scope
+from billing.preflight import allowed_in_background
 from module_1_document_processing.composio_connector.workspace_scope import workspace_connections
 from module_1_document_processing.del_acl_and_reconc.live_source_lister import (
     SWEEPABLE_SOURCES,
@@ -136,9 +139,23 @@ class ReconciliationScheduler:
                     continue
                 if user_id and getattr(conn, "user_id", "") != user_id:
                     continue
+                # Listing spends Composio executions: a workspace that may not spend is skipped.
+                if not allowed_in_background(conn.tenant_id, conn.user_id, f"{source} reconciliation"):
+                    continue
 
                 try:
-                    listing = lister.list_source(source, conn.user_id)
+                    with execution_scope() as executions:
+                        try:
+                            listing = lister.list_source(source, conn.user_id)
+                        finally:
+                            charge_connector_sync(
+                                workspace_id=conn.tenant_id,
+                                user_id=conn.user_id,
+                                source=source,
+                                meter=executions,
+                                trigger="reconciliation",
+                                reference=getattr(conn, "connection_id", None),
+                            )
                     if not listing.complete and not listing.items:
                         print(
                             f"[ReconciliationScheduler] Skipping {source} for user={conn.user_id}: "

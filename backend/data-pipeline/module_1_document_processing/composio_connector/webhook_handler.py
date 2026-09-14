@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException
 from typing import Any
+from billing.preflight import allowed_in_background_async
 from module_1_document_processing.composio_connector.event_router import EventRouter
 from module_1_document_processing.pipeline.queue_worker import QueueWorker
 from module_1_document_processing.composio_connector.gmail_store import GmailStore
@@ -60,7 +61,12 @@ async def composio_webhook_handler(request: Request):
         result = await notion_sync_manager.process_webhook_event(canonical_event, raw_payload=payload)
         return result
 
-    # 8. For other fallback sources, enqueue to QueueWorker
+    # 8. For other fallback sources, enqueue to QueueWorker. Ingesting it is paid work, so a workspace
+    # that may not spend skips the event (logged). The managers above check for themselves.
+    if not await allowed_in_background_async(
+        canonical_event.tenant_id, canonical_event.user_id, f"{canonical_event.source} webhook ingestion"
+    ):
+        return {"status": "skipped", "reason": "Workspace credits unavailable", "event_id": canonical_event.event_id}
     await queue_worker.enqueue(canonical_event)
     return {"status": "enqueued", "event_id": canonical_event.event_id, "source": canonical_event.source}
 

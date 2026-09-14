@@ -25,6 +25,7 @@ try:
 except ImportError:  # pragma: no cover
     requests = None
 
+from billing.metering import record_gemini_usage
 from module_1_document_processing.parsing.parsed_document import ParsedDocument
 from module_2_memory_gatekeeper.policy import GatekeeperPolicy, load_policy
 
@@ -112,9 +113,12 @@ class SemanticScorer:
                 print(f"[SemanticScorer] {model} HTTP {response.status_code}: {response.text[:200]}")
                 return SemanticScore(0.0, f"scorer unavailable ({response.status_code})", model, ok=False)
 
-            candidates = response.json().get("candidates") or []
+            body = response.json()
+            candidates = body.get("candidates") or []
             parts = (candidates[0].get("content", {}).get("parts") or []) if candidates else []
             raw = (parts[0].get("text") if parts else "") or ""
+            # Charged with the document's ingestion; thinking tokens count as output.
+            record_gemini_usage(model, body, purpose="gatekeeper_scorer", prompt_chars=len(prompt), output_chars=len(raw))
             return self._parse(raw, model)
         except Exception as err:
             print(f"[SemanticScorer] {model} request failed: {err}")

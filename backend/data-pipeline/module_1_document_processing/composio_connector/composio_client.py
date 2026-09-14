@@ -3,13 +3,20 @@ import time
 import threading
 from typing import Any
 
+from billing.metering import record_composio_execution
+
 try:
     from composio import Composio
 except ImportError:
     Composio = None
 
 class ComposioClient:
-    """Wrapper around Composio V3 SDK with OAuth Gateway redirect link generation, token lifecycle management, and webhook triggers."""
+    """Wrapper around Composio V3 SDK with OAuth Gateway redirect link generation, token lifecycle management, and webhook triggers.
+
+    Composio bills every tool call. Each ``tools.execute`` / ``tools.proxy`` call site records it with
+    ``billing.metering.record_composio_execution()``, which the sync run, webhook or sweep making the call
+    charges as ``connector.sync``. A new call site must do the same.
+    """
 
     GMAIL_NEW_MESSAGE = "GMAIL_NEW_GMAIL_MESSAGE"
     GDRIVE_FILE_CREATED = "GOOGLEDRIVE_FILE_CREATED_TRIGGER"
@@ -293,6 +300,7 @@ class ComposioClient:
                 args["page_token"] = page_token
 
             print(f"[ComposioClient] Executing GMAIL_FETCH_EMAILS for user_id={user_id} (limit={args['max_results']}, page_token={page_token})...")
+            record_composio_execution()
             res = self._composio.tools.execute(
                 slug="GMAIL_FETCH_EMAILS",
                 arguments=args,

@@ -20,6 +20,10 @@ os.environ.setdefault("GATEKEEPER_SEMANTIC_ENABLED", "false")
 # code path is covered by injecting a fake client in test_durable_queue.py.
 os.environ.setdefault("INGEST_QUEUE_BACKEND", "memory")
 
+# Credit metering calls billing-service and queues failed charges in Redis. Unit tests must reach
+# neither, so billing is off unless a test installs a fake client (tests/fake_billing.py).
+os.environ.setdefault("BILLING_ENABLED", "false")
+
 
 # Test runs must never write into the developer's live services. They did: the
 # catalog suites' default database URL is localhost:5432, the published port of

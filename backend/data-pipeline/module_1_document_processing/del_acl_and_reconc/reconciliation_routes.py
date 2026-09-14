@@ -11,6 +11,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from billing.preflight import require_credits_async
 from module_1_document_processing.del_acl_and_reconc.reconciliation_scheduler import (
     reconciliation_scheduler,
 )
@@ -52,6 +53,8 @@ async def run_reconciliation_sweep(
 ):
     """Re-list connected sources and reconcile deletions / ACL drift now."""
     require_writer(access)
+    # A sweep spends Composio executions: refused with 402 when the workspace may not spend.
+    await require_credits_async(access.workspace_id, access.user_id)
 
     reports = await asyncio.to_thread(
         reconciliation_scheduler.sweep_all,

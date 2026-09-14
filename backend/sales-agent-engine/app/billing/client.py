@@ -152,7 +152,7 @@ class BillingClient:
         timeout_seconds: float = 3.0,
         check_cache_seconds: float = 5.0,
         drain_interval_seconds: float = 30.0,
-        max_attempts: int = 50,
+        max_attempts: int = 720,  # at the 30 s interval, about six hours of billing-service trouble
         pending_max: int = 100_000,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:

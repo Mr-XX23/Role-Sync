@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 # pyrefly: ignore [missing-import]
 import py_eureka_client.eureka_client as eureka_client
+from billing.client import get_billing_client
 from module_1_document_processing.composio_connector.webhook_handler import router as webhook_router, queue_worker
 from module_1_document_processing.composio_connector.connector_routes import (
     router as connector_router,
@@ -80,6 +81,10 @@ async def lifespan(app: FastAPI):
     # Start Staging Queue Worker
     await queue_worker.start()
 
+    # Credit charges billing-service could not take wait in Redis (billing:pending_usage); this
+    # resends them with their original idempotency keys, so nothing is charged twice.
+    await get_billing_client().start_retrier()
+
     # Start Catalog CSV Import Worker
     await catalog_import_worker.start()
 
@@ -139,6 +144,7 @@ async def lifespan(app: FastAPI):
     await gdrive_sync_manager.stop_scheduler()
     await gmail_sync_manager.stop_scheduler()
     await queue_worker.stop()
+    await get_billing_client().stop_retrier()
     await catalog_import_worker.stop()
 
 

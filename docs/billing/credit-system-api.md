@@ -103,7 +103,7 @@ Browsers must send the key in the body: the gateway's CORS allow-list has no `Id
 header, so a browser preflight carrying it fails. Server-to-server callers may use the header instead.
 Returns an order; redirect the browser to `checkoutUrl`.
 ```json
-{"orderId": "uuid", "packageCode": "STARTER", "credits": 1000, "amountMinor": 1000, "currency": "usd",
+{"orderId": "uuid", "workspaceId": "uuid", "userId": "uuid", "packageCode": "STARTER", "credits": 1000, "amountMinor": 1000, "currency": "usd",
  "provider": "STRIPE", "status": "PENDING", "checkoutUrl": "https://checkout.stripe.com/...",
  "failureReason": null, "paidAt": null, "createdAt": "..."}
 ```
@@ -204,7 +204,8 @@ entries, so the format and rules are part of this contract:
   `duplicate: true`). **5xx, 401, 403, 404, 408, 409, 425, 429** or no answer → keep it and retry later under
   the same key (401/403/404 cover a missing token or a service mid-deploy). **Any other 4xx** (400, 422) →
   the request itself is wrong: log it with the body and drop it.
-- Give up after 50 attempts; cap the list at 100,000 entries.
+- Retry every 30 s and give up after 720 attempts (about six hours, so a billing-service outage or bad
+  deploy loses no charges); cap the list at 100,000 entries.
 
 ---
 
