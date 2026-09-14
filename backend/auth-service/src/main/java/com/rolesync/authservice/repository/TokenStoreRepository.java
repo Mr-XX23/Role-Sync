@@ -41,4 +41,13 @@ public interface TokenStoreRepository extends JpaRepository<TokenStore, UUID> {
         @Modifying
         @Query("DELETE FROM TokenStore t WHERE t.expiresAt < :now OR t.revoked = true")
         int deleteExpiredOrRevoked(@Param("now") java.time.LocalDateTime now);
+
+        /**
+         * Sessions of a user that can still be used: an access and a refresh token share a session id.
+         */
+        @Query("SELECT COUNT(DISTINCT t.sessionId) FROM TokenStore t " +
+                        "WHERE t.authUser.authUserId = :userId " +
+                        "AND t.revoked = false " +
+                        "AND t.expiresAt > :now")
+        long countActiveSessions(@Param("userId") UUID userId, @Param("now") java.time.LocalDateTime now);
 }

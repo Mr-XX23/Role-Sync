@@ -4,14 +4,18 @@ import com.rolesync.authservice.models.AuthUserCredentials;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.stereotype.Repository;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import java.util.UUID;
 
 @Repository
-public interface UserRepository extends JpaRepository<AuthUserCredentials, UUID> {
+public interface UserRepository extends JpaRepository<AuthUserCredentials, UUID>, JpaSpecificationExecutor<AuthUserCredentials> {
 
     boolean existsByEmail(String email);
 
@@ -38,4 +42,22 @@ public interface UserRepository extends JpaRepository<AuthUserCredentials, UUID>
 
     @Query("SELECT u FROM AuthUserCredentials u WHERE u.authUserId = :userId AND u.status != 'DELETED'")
     Optional<AuthUserCredentials> findActiveUserById(@Param("userId") UUID userId);
+
+    // Super Admin Console statistics
+
+    /** Rows of [status (null for old accounts), number of accounts]. */
+    @Query("SELECT u.status, COUNT(u) FROM AuthUserCredentials u GROUP BY u.status")
+    List<Object[]> countAccountsByStatus();
+
+    /** Rows of [login type, number of accounts]. */
+    @Query("SELECT u.loginType, COUNT(u) FROM AuthUserCredentials u GROUP BY u.loginType")
+    List<Object[]> countAccountsByLoginType();
+
+    @Query("SELECT COUNT(u) FROM AuthUserCredentials u WHERE u.isEmailVerified = true")
+    long countEmailVerified();
+
+    long countByCreatedAtGreaterThanEqual(LocalDateTime since);
+
+    @Query("SELECT u.createdAt FROM AuthUserCredentials u WHERE u.createdAt >= :since")
+    List<LocalDateTime> findCreatedAtSince(@Param("since") LocalDateTime since);
 }
