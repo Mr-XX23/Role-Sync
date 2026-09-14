@@ -18,7 +18,7 @@ from pydantic import Field, StringConstraints, model_validator
 from app.core.context import AgentContext
 from app.platform.data_pipeline import DataPipelineClient, DataPipelineError
 from app.platform.workspace_client import WorkspaceDirectory
-from app.tools.adapters.catalog_lookup import CatalogLookup, ProductId, Sku, find_location, variant_options, variant_payload
+from app.tools.adapters.catalog_lookup import CatalogLookup, ProductId, Sku, find_location, money, variant_options, variant_payload
 from app.tools.adapters.catalog_writes import (
     NewVariantArgs,
     check_same_options,
@@ -356,9 +356,9 @@ def catalog_setup_tools(client: DataPipelineClient, directory: WorkspaceDirector
         if before["sellable"] and not after["sellable"]:
             on_hand, reserved, _ = await location_use(ctx, str(current.get("id")))
             if on_hand:
-                warnings.append(f"its {on_hand} units on hand will no longer count as available to sell or reserve")
+                warnings.append(f"Its {on_hand} units on hand will no longer count as available to sell or reserve")
             if reserved:
-                warnings.append(f"the {reserved} units reserved there stay reserved")
+                warnings.append(f"The {reserved} units reserved there stay reserved")
         return current, after, changes, warnings
 
     async def update_stock_location(invocation: ToolInvocation) -> ToolOutput:
@@ -549,7 +549,7 @@ def catalog_setup_tools(client: DataPipelineClient, directory: WorkspaceDirector
             "kind": "catalog_skus",
             "product_id": args.product_id,
             "name": plan.product.get("name"),
-            "skus": [new.model_dump(mode="json") for new in args.skus],
+            "skus": [new.model_dump(mode="json") | {"price": money(new.price)} for new in args.skus],
             "new_option_values": plan.new_values,
             "warnings": plan.warnings,
         }

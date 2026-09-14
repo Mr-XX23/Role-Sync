@@ -356,7 +356,7 @@ async def test_stock_locations_are_added_changed_and_removed_only_if_never_used(
         {"field": "sellable", "before": True, "after": False},
         {"field": "city", "before": None, "after": "Kathmandu"},
     ]
-    assert preview["warnings"] == ["its 6 units on hand will no longer count as available to sell or reserve"]
+    assert preview["warnings"] == ["Its 6 units on hand will no longer count as available to sell or reserve"]
     [full] = [body for verb, path, body in pipeline.requests if verb == "PUT" and "/locations/" in path]
     assert full == {"name": "Main warehouse", "type": "WAREHOUSE", "sellable": False, "priority": 1,
                     "address": {"priority_label": "Primary", "city": "Kathmandu"}}  # every field, keeping what it had

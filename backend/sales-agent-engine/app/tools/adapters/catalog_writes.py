@@ -373,7 +373,7 @@ def catalog_write_tools(client: DataPipelineClient, directory: WorkspaceDirector
             "kind": "catalog_item",
             "item": args.model_dump(mode="json", exclude={"variants"}),
             "options": [{"name": name, "values": values} for name, values in option_axes(args.variants)],
-            "variants": [item.model_dump(mode="json") for item in args.variants],
+            "variants": [item.model_dump(mode="json") | {"price": money(item.price)} for item in args.variants],
         }
 
     async def retire_created(invocation: UndoInvocation) -> str:
@@ -433,7 +433,7 @@ def catalog_write_tools(client: DataPipelineClient, directory: WorkspaceDirector
             plan.warnings.append(f"'{name}' will have no active SKU left, so it can't be sold or quoted until one is reactivated")
         currencies = sorted({str(v.get("currency")) for v in active})
         if changed_fields & {"currency", "status"} and len(currencies) > 1:
-            plan.warnings.append(f"its active SKUs will be priced in {', '.join(currencies)}; a quote can't mix currencies")
+            plan.warnings.append(f"Its active SKUs will be priced in {', '.join(currencies)}; a quote can't mix currencies")
         return plan
 
     async def update_catalog_item(invocation: ToolInvocation) -> ToolOutput:
