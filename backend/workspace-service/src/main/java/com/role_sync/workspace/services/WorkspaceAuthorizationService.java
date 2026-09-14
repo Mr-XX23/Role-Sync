@@ -2,6 +2,7 @@ package com.role_sync.workspace.services;
 
 import com.role_sync.workspace.models.WorkspaceProfile;
 import com.role_sync.workspace.repository.WorkspaceMembershipRepository;
+import com.role_sync.workspace.repository.WorkspaceMembershipRepository.ActiveMembershipView;
 import com.role_sync.workspace.repository.WorkspaceProfileRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -54,15 +55,21 @@ public class WorkspaceAuthorizationService {
                         "No workspace profile exists for the authenticated user"));
     }
 
-    /** Requires the caller to be an active member of the workspace; returns their context. */
+    /**
+     * Requires the caller to be an active member of the workspace, and the workspace not to be
+     * suspended by the RoleSync team; returns their context.
+     */
     public CallerContext requireActiveMembership(UUID authUserId, UUID workspaceId) {
         WorkspaceProfile profile = requireProfile(authUserId);
-        String roleName = workspaceMembershipRepository
-                .findActiveRoleName(workspaceId, profile.getProfileId())
-                .map(WorkspaceAuthorizationService::normalizeRole)
+        ActiveMembershipView membership = workspaceMembershipRepository
+                .findActiveMembership(workspaceId, profile.getProfileId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN,
                         "You are not an active member of this workspace"));
-        return new CallerContext(profile.getProfileId(), roleName);
+        if (Boolean.FALSE.equals(membership.getWorkspaceActive())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "This workspace has been suspended by the RoleSync team");
+        }
+        return new CallerContext(profile.getProfileId(), normalizeRole(membership.getRoleName()));
     }
 
     /** As {@link #requireActiveMembership} but the caller must be OWNER or ADMIN. */
