@@ -212,6 +212,23 @@ class DataPipelineClient:
         body = await self._get("/api/v1/catalog/locations", user_id, tenant_id=tenant_id)
         return [item for item in body or [] if isinstance(item, dict)]
 
+    async def list_products(self, user_id: UUID, tenant_id: UUID, params: dict[str, Any]) -> list[dict[str, Any]]:
+        """Products newest first, filtered by status, category, type, keywords, industry, price and stock
+        (``in_stock``/``location_id``), with ``limit``/``offset``. Variants included, options not."""
+        body = await self._get("/api/v1/catalog/products", user_id, tenant_id=tenant_id, params=params)
+        return [item for item in body or [] if isinstance(item, dict)]
+
+    async def batch_availability(self, user_id: UUID, tenant_id: UUID, skus: list[str]) -> dict[str, dict[str, Any]]:
+        """Stock of several SKUs in one call: ``{sku: {total_available, by_location}}``; unknown SKUs are left out."""
+        if not skus:
+            return {}
+        body = await self._get("/api/v1/catalog/inventory/availability", user_id, tenant_id=tenant_id, params={"skus": skus})
+        return {str(sku): entry for sku, entry in (body or {}).items() if isinstance(entry, dict)}
+
+    async def describe_catalog(self, user_id: UUID, tenant_id: UUID) -> dict[str, Any]:
+        """The catalog's vocabulary: ``{categories, option_types, filterable_fields}``."""
+        return await self._get("/api/v1/catalog/describe", user_id, tenant_id=tenant_id)
+
     # ------------------------------------------------------------------ catalog writes
     async def create_product(self, user_id: UUID, tenant_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._send("POST", "/api/v1/catalog/products", user_id, tenant_id=tenant_id, json=payload)
@@ -226,6 +243,46 @@ class DataPipelineClient:
         """Soft delete: the product and all its variants become RETIRED (never a hard delete)."""
         return await self._send(
             "DELETE", f"/api/v1/catalog/products/{quote(product_id, safe='')}", user_id, tenant_id=tenant_id, missing_ok=True
+        )
+
+    async def set_options(
+        self, user_id: UUID, tenant_id: UUID, product_id: str, options: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Make a product's option axes exactly ``options`` (``[{name, position, values: [{value, position}]}]``).
+        Axes and values that stay keep their ids, so the SKUs linked to them stay linked."""
+        body = await self._send(
+            "PUT",
+            f"/api/v1/catalog/products/{quote(product_id, safe='')}/options",
+            user_id,
+            tenant_id=tenant_id,
+            json={"options": options},
+        )
+        return [item for item in body or [] if isinstance(item, dict)]
+
+    async def save_category(self, user_id: UUID, tenant_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a category, or relabel the one with this ``key``."""
+        return await self._send("POST", "/api/v1/catalog/categories", user_id, tenant_id=tenant_id, json=payload)
+
+    async def delete_category(self, user_id: UUID, tenant_id: UUID, key: str) -> bool:
+        """Remove a category no product uses; ``False`` if it was already gone (400 if it is in use)."""
+        found = await self._send(
+            "DELETE", f"/api/v1/catalog/categories/{quote(key, safe='')}", user_id, tenant_id=tenant_id, missing_ok=True, empty_ok=True
+        )
+        return found is not None
+
+    async def create_location(self, user_id: UUID, tenant_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._send("POST", "/api/v1/catalog/locations", user_id, tenant_id=tenant_id, json=payload)
+
+    async def update_location(self, user_id: UUID, tenant_id: UUID, location_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Replace a location's details: every field is written, so send the full record."""
+        return await self._send(
+            "PUT", f"/api/v1/catalog/locations/{quote(location_id, safe='')}", user_id, tenant_id=tenant_id, json=payload
+        )
+
+    async def delete_location(self, user_id: UUID, tenant_id: UUID, location_id: str) -> None:
+        """Remove a location without stock (400 while it has on-hand or reserved units)."""
+        await self._send(
+            "DELETE", f"/api/v1/catalog/locations/{quote(location_id, safe='')}", user_id, tenant_id=tenant_id, empty_ok=True
         )
 
     async def upsert_variants(
@@ -285,8 +342,10 @@ class DataPipelineClient:
         files: Any = None,
         data: Any = None,
         missing_ok: bool = False,
+        empty_ok: bool = False,
         timeout: float | None = None,
     ) -> Any:
+        """The JSON answer; ``None`` for a 404 when ``missing_ok``; ``{}`` for an empty answer (204) when ``empty_ok``."""
         headers = {"X-User-Id": str(user_id)}
         if tenant_id is not None:
             headers["X-Tenant-Id"] = str(tenant_id)
@@ -309,6 +368,8 @@ class DataPipelineClient:
             return None
         if response.status_code >= 400:
             raise DataPipelineError(f"data-pipeline {response.status_code}: {_detail(response)}", status=response.status_code)
+        if empty_ok and (response.status_code == 204 or not response.content):
+            return {}
         try:
             return response.json()
         except ValueError as exc:

@@ -81,7 +81,8 @@ def test_every_write_tool_shows_the_reviewer_a_preview_and_says_how_to_undo_it()
         "create_quote", "create_catalog_item", "update_catalog_item", "record_stock_movement", "correct_stock_count",
         "reserve_stock", "release_stock", "retire_catalog_item", "undo_actions", "create_deal", "update_deal",
         "add_web_page_to_knowledge_base", "update_knowledge_document", "reclassify_knowledge_document",
-        "reindex_knowledge_document", "delete_knowledge_document",
+        "reindex_knowledge_document", "delete_knowledge_document", "save_catalog_category", "delete_catalog_category",
+        "create_stock_location", "update_stock_location", "delete_stock_location", "add_catalog_skus", "restore_catalog_item",
     }
     assert all(d.preview is not None for d in writes.values())
     # Only these can't be reversed: a sent email, a released reservation, an undo itself, and indexing a document
@@ -113,6 +114,17 @@ def test_sub_agent_scopes_stay_narrow_over_the_full_tool_set():
     }
     assert not knowledge & {d.name for agent in ("research", "outreach", "quote") for d in scopes.tools_for(agent, registry)}
     assert knowledge <= {d.name for d in scopes.tools_for("orchestrator", registry)}
+    # The quote agent prices and holds stock; setting up categories, locations and SKUs is the coordinator's.
+    setup = {d.name for d in registry.all() if d.scope is ToolScope.CATALOG_SETUP}
+    assert setup == {
+        "save_catalog_category", "delete_catalog_category", "create_stock_location", "update_stock_location",
+        "delete_stock_location", "add_catalog_skus", "restore_catalog_item",
+    }
+    assert not setup & {d.name for agent in ("research", "outreach", "quote") for d in scopes.tools_for(agent, registry)}
+    assert setup <= {d.name for d in scopes.tools_for("orchestrator", registry)}
+    assert {"list_catalog_items", "get_catalog_item", "describe_catalog", "list_stock_reservations"} <= {
+        d.name for d in scopes.tools_for("research", registry)
+    }
     assert {"list_knowledge_documents", "search_knowledge_base"} <= {d.name for d in scopes.tools_for("research", registry)}
     # The agent's memory needs its own scope: no sub-agent has it yet.
     memory = {d.name for d in registry.all() if d.kind is ToolKind.MEMORY}

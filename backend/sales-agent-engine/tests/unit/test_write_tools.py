@@ -287,14 +287,17 @@ async def test_price_and_detail_changes_record_what_they_replaced_and_undo_resto
 
     preview, output = await _run(
         update,
-        {"product_id": product["id"], "max_discount_pct": 15, "description": "Now with AI", "prices": [{"sku": "PRO-1", "price": 59}]},
+        {"product_id": product["id"], "max_discount_pct": 15, "description": "Now with AI", "sku_changes": [{"sku": "PRO-1", "price": 59}]},
     )
 
     assert preview["changes"] == [
         {"field": "description", "before": "RoleSync Pro description", "after": "Now with AI"},
         {"field": "max_discount_pct", "before": "10.00", "after": "15.00"},
     ]
-    assert preview["price_changes"] == [{"sku": "PRO-1", "before": "49.00", "after": "59.00", "currency": "USD"}]
+    assert preview["sku_changes"] == [{"sku": "PRO-1", "field": "price", "before": "49.00", "after": "59.00", "currency": "USD"}]
+    # Approvals saved before sku_changes existed name new prices as ``prices``; they still read.
+    old = update.input_model.model_validate({"product_id": product["id"], "prices": [{"sku": "PRO-1", "price": 59}]})
+    assert [(change.sku, change.price) for change in old.sku_changes] == [("PRO-1", 59)]
     put = next(body for method, path, body in pipeline.requests if method == "PUT")
     assert put == {"description": "Now with AI", "max_discount_pct": "15.00"}  # only what changed
     # The variant upsert overwrites every field, so the full current state is sent.

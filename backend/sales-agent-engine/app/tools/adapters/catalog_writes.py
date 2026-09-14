@@ -1,9 +1,10 @@
 """Catalog and inventory writes over data-pipeline's catalog API (shared by the workspace).
 
-As decided for this build, the agent may create items, update details, prices and discount
-limits, record stock movements and reserve or release stock; it retires items and never
-hard-deletes them. Every change records what it replaced, so undo restores exactly what was
-there. Viewers of a workspace can't change its catalog.
+As decided for this build, the agent may create items (with their options and SKUs), update
+details, discount limits and each SKU's price, currency, barcode, weight and status, record
+stock movements and reserve or release stock; it retires items and never hard-deletes them.
+Every change records what it replaced, so undo restores exactly what was there. Viewers of a
+workspace can't change its catalog.
 
 Stock follows data-pipeline's typed movements: what happened (received, sold, shipped, damaged,
 lost, returned) is recorded, and the history can't be edited. Only workspace owners and admins
@@ -11,22 +12,33 @@ may replace a count (a count correction, with a note); the agent checks that bef
 rep to approve, so a member is never shown an approval that is bound to be refused.
 
 data-pipeline's variant upsert overwrites every field of a variant (barcode, currency,
-weight, status, option values), so a price change always sends the variant's full current
-state with only the price replaced.
+weight, status, option values), so a SKU change always sends the variant's full current
+state with only the changed fields replaced.
 """
 
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
-from decimal import Decimal, InvalidOperation
-from typing import Annotated, Any, Literal
+from decimal import Decimal
+from typing import Any, Literal
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import Field, model_validator
 
 from app.core.context import AgentContext
 from app.platform.data_pipeline import DataPipelineClient, DataPipelineError
 from app.platform.workspace_client import WorkspaceDirectory
+from app.tools.adapters.catalog_lookup import (
+    CatalogLookup,
+    OptionChoiceArgs,
+    ProductId,
+    Sku,
+    Tag,
+    money,
+    same_number,
+    variant_payload,
+)
 from app.tools.adapters.common import (
     as_dict,
     as_list,
@@ -51,13 +63,10 @@ from app.tools.types import (
     UndoPlan,
 )
 
-Tag = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
-ProductId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=36, max_length=36)]
-Sku = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
-
-_TEXT_FIELDS = ("name", "category", "subcategory", "description", "value_proposition", "ideal_customer_profile", "status")
+_TEXT_FIELDS = ("name", "type", "category", "subcategory", "description", "value_proposition", "ideal_customer_profile", "status")
 _LIST_FIELDS = ("keywords", "use_cases", "target_industries", "competitors_beats", "sales_tags")
 _NUMBER_FIELDS = ("min_discount_pct", "max_discount_pct")
+_SKU_FIELDS = ("price", "currency", "barcode", "weight", "status")
 
 MovementType = Literal["RECEIVED", "SOLD", "SHIPPED", "DAMAGED", "LOST", "RETURNED"]
 HistoryType = Literal["RECEIVED", "SOLD", "SHIPPED", "DAMAGED", "LOST", "RETURNED", "CORRECTION"]
@@ -87,6 +96,40 @@ class NewVariantArgs(ToolInput):
     sku: Sku
     price: float = Field(ge=0, le=1_000_000_000)
     currency: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
+    barcode: str | None = Field(default=None, max_length=100)
+    weight: float | None = Field(default=None, ge=0, le=1_000_000)
+    options: list[OptionChoiceArgs] = Field(
+        default_factory=list,
+        max_length=5,
+        description="This SKU's option values, e.g. Size M and Color Black. Every SKU of an item names the same options",
+    )
+
+    @model_validator(mode="after")
+    def _one_value_per_option(self) -> NewVariantArgs:
+        names = [choice.name.lower() for choice in self.options]
+        if len(set(names)) != len(names):
+            raise ValueError(f"SKU {self.sku} names an option more than once")
+        return self
+
+
+def check_same_options(variants: list[NewVariantArgs]) -> None:
+    """Every SKU names the same options, and no two SKUs have the same values (``ValueError``)."""
+    if not variants:
+        return
+    first = sorted(choice.name.lower() for choice in variants[0].options)
+    for item in variants[1:]:
+        if sorted(choice.name.lower() for choice in item.options) != first:
+            raise ValueError(
+                f"every SKU must name the same options ({variants[0].sku}: {_names(variants[0])}; {item.sku}: {_names(item)})"
+            )
+    if first:
+        combinations = [frozenset((c.name.lower(), c.value.lower()) for c in item.options) for item in variants]
+        if len(set(combinations)) != len(combinations):
+            raise ValueError("two SKUs have the same option values; each SKU needs its own combination")
+
+
+def _names(item: NewVariantArgs) -> str:
+    return ", ".join(choice.name for choice in item.options) or "no options"
 
 
 class CreateCatalogItemArgs(ToolInput):
@@ -113,17 +156,31 @@ class CreateCatalogItemArgs(ToolInput):
             raise ValueError("min_discount_pct can't be above max_discount_pct")
         if len({variant.sku for variant in self.variants}) != len(self.variants):
             raise ValueError("each SKU may appear only once")
+        check_same_options(self.variants)
         return self
 
 
-class PriceChangeArgs(ToolInput):
+class SkuChangeArgs(ToolInput):
     sku: Sku
-    price: float = Field(ge=0, le=1_000_000_000)
+    price: float | None = Field(default=None, ge=0, le=1_000_000_000)
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    barcode: str | None = Field(default=None, max_length=100, description="Empty text removes the barcode")
+    weight: float | None = Field(default=None, ge=0, le=1_000_000)
+    status: Literal["ACTIVE", "RETIRED"] | None = Field(
+        default=None, description="RETIRED stops this one SKU being sold or quoted; ACTIVE sells it again"
+    )
+
+    @model_validator(mode="after")
+    def _changes_something(self) -> SkuChangeArgs:
+        if all(getattr(self, name) is None for name in _SKU_FIELDS):
+            raise ValueError(f"say what to change about SKU {self.sku}")
+        return self
 
 
 class UpdateCatalogItemArgs(ToolInput):
-    product_id: ProductId = Field(description="product_id from search_catalog")
+    product_id: ProductId = Field(description="product_id from search_catalog or list_catalog_items")
     name: str | None = Field(default=None, min_length=3, max_length=255)
+    type: Literal["PRODUCT", "SERVICE"] | None = None
     category: str | None = Field(default=None, min_length=1, max_length=100)
     subcategory: str | None = Field(default=None, max_length=100)
     status: Literal["DRAFT", "ACTIVE"] | None = None
@@ -137,7 +194,27 @@ class UpdateCatalogItemArgs(ToolInput):
     sales_tags: list[Tag] | None = Field(default=None, max_length=30)
     min_discount_pct: float | None = Field(default=None, ge=0, le=100)
     max_discount_pct: float | None = Field(default=None, ge=0, le=100)
-    prices: list[PriceChangeArgs] = Field(default_factory=list, max_length=50, description="New prices by SKU")
+    sku_changes: list[SkuChangeArgs] = Field(
+        default_factory=list,
+        max_length=50,
+        description="Changes to this item's SKUs: price, currency, barcode, weight, or status",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _prices_are_sku_changes(cls, data: Any) -> Any:
+        # Approvals saved before sku_changes existed list new prices as ``prices``.
+        if isinstance(data, dict) and "prices" in data:
+            data = dict(data)
+            data["sku_changes"] = [*(data.get("sku_changes") or []), *(data.pop("prices") or [])]
+        return data
+
+    @model_validator(mode="after")
+    def _each_sku_once(self) -> UpdateCatalogItemArgs:
+        skus = [change.sku for change in self.sku_changes]
+        if len(set(skus)) != len(skus):
+            raise ValueError("each SKU may appear only once in sku_changes")
+        return self
 
 
 class StockMovementArgs(ToolInput):
@@ -176,7 +253,7 @@ class CorrectStockCountArgs(ToolInput):
     counted_quantity: int = Field(ge=0, le=1_000_000_000, description="How many units are actually there")
     expected_on_hand: int = Field(
         ge=0,
-        description="The on-hand quantity check_inventory showed just before; if stock has changed since, nothing is changed",
+        description="The on-hand quantity check_inventory showed at this location just before; if stock has changed since, nothing is changed",
     )
     location: str | None = Field(default=None, max_length=255, description="Location name or id; needed if there are several")
     note: str = Field(min_length=3, max_length=1000, description="Why the count is being corrected")
@@ -198,85 +275,53 @@ class ReserveStockArgs(ToolInput):
 
 
 class ReleaseStockArgs(ToolInput):
-    reservation_id: ProductId = Field(description="reservation_id from reserve_stock or create_quote")
+    reservation_id: ProductId = Field(description="reservation_id from reserve_stock, create_quote or list_stock_reservations")
 
 
 class RetireCatalogItemArgs(ToolInput):
     product_id: ProductId
 
 
+@dataclass
+class _UpdatePlan:
+    current: dict[str, Any]
+    changes: dict[str, Any]  # product fields: new values
+    previous: dict[str, Any]  # product fields: the values they replace
+    payloads: list[dict[str, Any]]  # full variant states to upsert
+    sku_changes: list[dict[str, Any]]  # {sku, field, before, after}, for the reviewer
+    sku_undo: list[dict[str, Any]]  # {sku, fields: the values they replace}
+    warnings: list[str] = field(default_factory=list)
+
+
+def option_axes(variants: list[NewVariantArgs]) -> list[tuple[str, list[str]]]:
+    """The options new SKUs name, in the order they first appear: ``[(name, [values])]``."""
+    axes: dict[str, tuple[str, dict[str, str]]] = {}
+    for item in variants:
+        for choice in item.options:
+            name, values = axes.setdefault(choice.name.lower(), (choice.name, {}))
+            values.setdefault(choice.value.lower(), choice.value)
+    return [(name, list(values.values())) for name, values in axes.values()]
+
+
+def option_value_ids(options: list[Any]) -> dict[tuple[str, str], str]:
+    """(option name, value), both lower-cased → option value id, from data-pipeline's options."""
+    return {
+        (str(option.get("name")).lower(), str(value.get("value")).lower()): str(value.get("id"))
+        for option in map(as_dict, options)
+        for value in map(as_dict, as_list(option.get("values")))
+    }
+
+
 def catalog_write_tools(client: DataPipelineClient, directory: WorkspaceDirectory) -> list[ToolDefinition]:
     writer = workspace_writer_required(directory, "the catalog")
-
-    # ------------------------------------------------------------------ lookups
-    async def product(ctx: AgentContext, product_id: str) -> dict[str, Any]:
-        try:
-            found = await client.product(ctx.user_id, ctx.tenant_id, product_id)
-        except DataPipelineError as exc:
-            if exc.status in (400, 422):
-                raise ToolInputError(f"'{product_id}' is not a catalog product id") from exc
-            raise pipeline_failure(exc) from exc
-        if not isinstance(found, dict):
-            raise ToolInputError(f"no catalog item {product_id} in this workspace")
-        return found
-
-    async def variant(ctx: AgentContext, sku: str) -> dict[str, Any]:
-        try:
-            found = await client.variant(ctx.user_id, ctx.tenant_id, sku)
-        except DataPipelineError as exc:
-            raise pipeline_failure(exc) from exc
-        if not isinstance(found, dict):
-            raise ToolInputError(f"no SKU '{sku}' in this workspace's catalog")
-        return found
-
-    async def check_category(ctx: AgentContext, category: str) -> None:
-        try:
-            keys = [str(item.get("key")) for item in await client.categories(ctx.user_id, ctx.tenant_id)]
-        except DataPipelineError as exc:
-            raise pipeline_failure(exc) from exc
-        if category not in keys:
-            known = ", ".join(sorted(keys)[:40]) or "none yet"
-            raise ToolInputError(f"'{category}' is not a catalog category of this workspace (categories: {known})")
-
-    async def location(ctx: AgentContext, wanted: str | None) -> dict[str, Any]:
-        try:
-            locations = await client.locations(ctx.user_id, ctx.tenant_id)
-        except DataPipelineError as exc:
-            raise pipeline_failure(exc) from exc
-        names = ", ".join(str(item.get("name")) for item in locations) or "none"
-        if not locations:
-            raise ToolInputError("this workspace has no stock locations yet; add one in the catalog first")
-        if wanted:
-            key = wanted.strip().lower()
-            for item in locations:
-                if key in (str(item.get("id")).lower(), str(item.get("name") or "").strip().lower()):
-                    return item
-            raise ToolInputError(f"no stock location '{wanted}' (locations: {names})")
-        if len(locations) == 1:
-            return locations[0]
-        raise ToolInputError(f"say which stock location to use (locations: {names})")
-
-    async def stock_at(ctx: AgentContext, sku: str, location_id: str) -> tuple[int, int]:
-        """(on hand, reserved) of a SKU at a location."""
-        try:
-            availability = await client.availability(ctx.user_id, ctx.tenant_id, sku)
-        except DataPipelineError as exc:
-            raise pipeline_failure(exc) from exc
-        for level in as_list(as_dict(availability).get("by_location")):
-            if str(as_dict(level).get("location_id")) == location_id:
-                return int(level.get("qty_on_hand") or 0), int(level.get("qty_reserved") or 0)
-        return 0, 0
+    lookup = CatalogLookup(client)
+    product, variant, check_category = lookup.product, lookup.variant, lookup.check_category
+    location, stock_at = lookup.location, lookup.stock_at
 
     # ------------------------------------------------------------------ create
     async def validate_new_item(ctx: AgentContext, args: CreateCatalogItemArgs) -> None:
         await check_category(ctx, args.category)
-        taken = []
-        for item in args.variants:
-            try:
-                if await client.variant(ctx.user_id, ctx.tenant_id, item.sku) is not None:
-                    taken.append(item.sku)
-            except DataPipelineError as exc:
-                raise pipeline_failure(exc) from exc
+        taken = [item.sku for item in args.variants if await lookup.sku_in_use(ctx, item.sku)]
         if taken:
             raise ToolInputError(f"SKU already in use in this catalog: {', '.join(taken)}")
 
@@ -286,7 +331,13 @@ def catalog_write_tools(client: DataPipelineClient, directory: WorkspaceDirector
         ctx = invocation.ctx
         await validate_new_item(ctx, args)
         payload = args.model_dump(mode="json", exclude={"variants"})
-        payload |= {"min_discount_pct": _pct(args.min_discount_pct), "max_discount_pct": _pct(args.max_discount_pct)}
+        payload |= {"min_discount_pct": money(args.min_discount_pct), "max_discount_pct": money(args.max_discount_pct)}
+        axes = option_axes(args.variants)
+        if axes:
+            payload["options"] = [
+                {"name": name, "position": index, "values": [{"value": value, "position": order} for order, value in enumerate(values)]}
+                for index, (name, values) in enumerate(axes)
+            ]
         try:
             created = await client.create_product(ctx.user_id, ctx.tenant_id, payload)
         except DataPipelineError as exc:
@@ -294,23 +345,23 @@ def catalog_write_tools(client: DataPipelineClient, directory: WorkspaceDirector
         product_id = str(created.get("id"))
         undo = UndoPlan(args={"product_id": product_id, "name": args.name}, label=f"Retire the new catalog item '{args.name}'")
         if args.variants:
-            variants = [
-                {"sku": item.sku, "price": _money(item.price), "currency": item.currency, "status": "ACTIVE", "option_value_ids": []}
-                for item in args.variants
-            ]
+            ids = option_value_ids(as_list(created.get("options")))
             try:
+                variants = [new_variant_payload(item, ids) for item in args.variants]
                 await client.upsert_variants(ctx.user_id, ctx.tenant_id, product_id, variants)
-            except DataPipelineError as exc:
+            except (DataPipelineError, KeyError) as exc:
                 # Don't leave a half-made item behind: retire it, then report the failure.
+                reason = f"option value {exc} is missing" if isinstance(exc, KeyError) else str(exc)
                 try:
                     await client.retire_product(ctx.user_id, ctx.tenant_id, product_id)
                     cleanup = "the item was retired again"
                 except DataPipelineError:
                     cleanup = f"retiring the item {product_id} also failed"
-                raise ToolFailed(f"the item was created but its SKUs could not be added ({exc}); {cleanup}") from exc
+                raise ToolFailed(f"the item was created but its SKUs could not be added ({reason}); {cleanup}") from exc
+        options = f" in {' × '.join(f'{len(values)} {name}' for name, values in axes)}" if axes else ""
         return ToolOutput(
             data={"product_id": product_id, "name": args.name, "status": args.status, "skus": [v.sku for v in args.variants]},
-            summary=f"Catalog item '{args.name}' created as {args.status} with {plural(len(args.variants), 'SKU')}",
+            summary=f"Catalog item '{args.name}' created as {args.status} with {plural(len(args.variants), 'SKU')}{options}",
             ref_id=product_id,
             undo=undo,
         )
@@ -321,6 +372,7 @@ def catalog_write_tools(client: DataPipelineClient, directory: WorkspaceDirector
         return {
             "kind": "catalog_item",
             "item": args.model_dump(mode="json", exclude={"variants"}),
+            "options": [{"name": name, "values": values} for name, values in option_axes(args.variants)],
             "variants": [item.model_dump(mode="json") for item in args.variants],
         }
 
@@ -328,23 +380,26 @@ def catalog_write_tools(client: DataPipelineClient, directory: WorkspaceDirector
         return await retire(invocation.ctx, str(invocation.args["product_id"]), str(invocation.args.get("name") or "item"))
 
     # ------------------------------------------------------------------ update
-    async def plan_update(ctx: AgentContext, args: UpdateCatalogItemArgs) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
-        """(current product, new field values, previous field values, variant payloads, price changes)."""
+    async def plan_update(ctx: AgentContext, args: UpdateCatalogItemArgs) -> _UpdatePlan:
         current = await product(ctx, args.product_id)
+        name = str(current.get("name"))
+        retired = current.get("status") == "RETIRED"
+        if retired and (args.status or any(change.status == "ACTIVE" for change in args.sku_changes)):
+            raise ToolInputError(f"'{name}' is retired; bring it back with restore_catalog_item first")
         changes: dict[str, Any] = {}
         previous: dict[str, Any] = {}
-        for name in (*_TEXT_FIELDS, *_LIST_FIELDS, *_NUMBER_FIELDS):
-            value = getattr(args, name)
+        for field_name in (*_TEXT_FIELDS, *_LIST_FIELDS, *_NUMBER_FIELDS):
+            value = getattr(args, field_name)
             if value is None:
                 continue
-            before = current.get(name)
-            if name in _NUMBER_FIELDS:
-                value = _pct(value)
-                if _same_number(before, value):
+            before = current.get(field_name)
+            if field_name in _NUMBER_FIELDS:
+                value = money(value)
+                if same_number(before, value):
                     continue
             elif value == before:
                 continue
-            changes[name], previous[name] = value, before
+            changes[field_name], previous[field_name] = value, before
         lowest = Decimal(str(changes.get("min_discount_pct", current.get("min_discount_pct") or 0)))
         highest = Decimal(str(changes.get("max_discount_pct", current.get("max_discount_pct") or 0)))
         if lowest > highest:
@@ -353,99 +408,113 @@ def catalog_write_tools(client: DataPipelineClient, directory: WorkspaceDirector
             await check_category(ctx, changes["category"])
 
         variants_by_sku = {str(v.get("sku")): as_dict(v) for v in as_list(current.get("variants"))}
-        payloads: list[dict[str, Any]] = []
-        price_changes: list[dict[str, Any]] = []
-        for change in args.prices:
+        plan = _UpdatePlan(current, changes, previous, [], [], [])
+        for change in args.sku_changes:
             existing = variants_by_sku.get(change.sku)
             if existing is None:
-                raise ToolInputError(f"'{current.get('name')}' has no SKU '{change.sku}' (SKUs: {', '.join(variants_by_sku) or 'none'})")
-            if _same_number(existing.get("price"), change.price):
+                raise ToolInputError(f"'{name}' has no SKU '{change.sku}' (SKUs: {', '.join(variants_by_sku) or 'none'})")
+            overrides, replaced = _sku_overrides(existing, change)
+            if not overrides:
                 continue
-            payloads.append(_variant_payload(existing, price=_money(change.price)))
-            price_changes.append(
-                {"sku": change.sku, "before": str(existing.get("price")), "after": _money(change.price), "currency": existing.get("currency")}
-            )
-        if not changes and not payloads:
+            plan.payloads.append(variant_payload(existing, **overrides))
+            plan.sku_undo.append({"sku": change.sku, "fields": replaced})
+            for field_name, after in overrides.items():
+                row = {"sku": change.sku, "field": field_name, "before": replaced[field_name], "after": after}
+                if field_name == "price":
+                    row["currency"] = overrides.get("currency") or existing.get("currency")
+                plan.sku_changes.append(row)
+            existing.update(overrides)  # the item as it will be, for the warnings below
+        if not changes and not plan.payloads:
             raise ToolInputError("nothing to change: the item already has these values")
-        return current, changes, previous, payloads, price_changes
+
+        changed_fields = {row["field"] for row in plan.sku_changes}
+        active = [v for v in variants_by_sku.values() if v.get("status") == "ACTIVE"]
+        if "status" in changed_fields and not active and changes.get("status", current.get("status")) == "ACTIVE":
+            plan.warnings.append(f"'{name}' will have no active SKU left, so it can't be sold or quoted until one is reactivated")
+        currencies = sorted({str(v.get("currency")) for v in active})
+        if changed_fields & {"currency", "status"} and len(currencies) > 1:
+            plan.warnings.append(f"its active SKUs will be priced in {', '.join(currencies)}; a quote can't mix currencies")
+        return plan
 
     async def update_catalog_item(invocation: ToolInvocation) -> ToolOutput:
         args = invocation.args
         assert isinstance(args, UpdateCatalogItemArgs)
         ctx = invocation.ctx
-        current, changes, previous, payloads, price_changes = await plan_update(ctx, args)
-        name = str(changes.get("name") or current.get("name"))
-        if changes:
+        plan = await plan_update(ctx, args)
+        name = str(plan.changes.get("name") or plan.current.get("name"))
+        if plan.changes:
             try:
-                await client.update_product(ctx.user_id, ctx.tenant_id, args.product_id, changes)
+                await client.update_product(ctx.user_id, ctx.tenant_id, args.product_id, plan.changes)
             except DataPipelineError as exc:
                 raise pipeline_write_failure(exc) from exc
-        if payloads:
+        if plan.payloads:
             try:
-                await client.upsert_variants(ctx.user_id, ctx.tenant_id, args.product_id, payloads)
+                await client.upsert_variants(ctx.user_id, ctx.tenant_id, args.product_id, plan.payloads)
             except DataPipelineError as exc:
-                if changes:
+                if plan.changes:
                     try:
-                        await client.update_product(ctx.user_id, ctx.tenant_id, args.product_id, previous)
+                        await client.update_product(ctx.user_id, ctx.tenant_id, args.product_id, plan.previous)
                         cleanup = "the other changes were reverted"
                     except DataPipelineError:
                         cleanup = "reverting the other changes also failed"
-                    raise ToolFailed(f"the prices could not be changed ({exc}); {cleanup}") from exc
+                    raise ToolFailed(f"the SKUs could not be changed ({exc}); {cleanup}") from exc
                 raise pipeline_write_failure(exc) from exc
-        described = [f"{field} changed" for field in changes] + [
-            f"{item['sku']} price {item['before']} → {item['after']}" for item in price_changes
+        described = [f"{field_name} changed" for field_name in plan.changes] + [
+            f"{row['sku']} {row['field']} {row['before']} → {row['after']}" for row in plan.sku_changes
         ]
+        changed_names = [*plan.changes, *(f"{item['sku']} {', '.join(item['fields'])}" for item in plan.sku_undo)]
         return ToolOutput(
             data={
                 "product_id": args.product_id,
                 "name": name,
-                "changes": [{"field": field, "before": previous[field], "after": value} for field, value in changes.items()],
-                "price_changes": price_changes,
+                "changes": [{"field": f, "before": plan.previous[f], "after": value} for f, value in plan.changes.items()],
+                "sku_changes": plan.sku_changes,
+                "warnings": plan.warnings,
             },
             summary=f"Catalog item '{name}' updated: " + "; ".join(described),
             ref_id=args.product_id,
             undo=UndoPlan(
-                args={
-                    "product_id": args.product_id,
-                    "fields": previous,
-                    "prices": [{"sku": item["sku"], "price": item["before"]} for item in price_changes],
-                },
-                label=f"Restore the previous values of '{name}' ({', '.join([*changes, *(i['sku'] + ' price' for i in price_changes)])})",
+                args={"product_id": args.product_id, "fields": plan.previous, "skus": plan.sku_undo},
+                label=f"Restore the previous values of '{name}' ({', '.join(changed_names)})",
             ),
         )
 
     async def update_preview(ctx: AgentContext, args: ToolInput) -> dict[str, Any]:
         assert isinstance(args, UpdateCatalogItemArgs)
-        current, changes, previous, _, price_changes = await plan_update(ctx, args)
+        plan = await plan_update(ctx, args)
         return {
             "kind": "catalog_update",
             "product_id": args.product_id,
-            "name": current.get("name"),
-            "changes": [{"field": field, "before": previous[field], "after": value} for field, value in changes.items()],
-            "price_changes": price_changes,
+            "name": plan.current.get("name"),
+            "changes": [{"field": f, "before": plan.previous[f], "after": value} for f, value in plan.changes.items()],
+            "sku_changes": plan.sku_changes,
+            "warnings": plan.warnings,
         }
 
     async def restore_values(invocation: UndoInvocation) -> str:
         ctx = invocation.ctx
         product_id = str(invocation.args["product_id"])
         fields = as_dict(invocation.args.get("fields"))
-        prices = as_list(invocation.args.get("prices"))
+        skus = [as_dict(item) for item in as_list(invocation.args.get("skus"))]
+        # Undo records written before per-SKU changes existed list old prices only.
+        skus += [{"sku": item.get("sku"), "fields": {"price": item.get("price")}} for item in map(as_dict, as_list(invocation.args.get("prices")))]
         try:
             if fields:
                 await client.update_product(ctx.user_id, ctx.tenant_id, product_id, fields)
-            if prices:
+            if skus:
                 current = await product(ctx, product_id)
                 variants_by_sku = {str(v.get("sku")): as_dict(v) for v in as_list(current.get("variants"))}
                 payloads = [
-                    _variant_payload(variants_by_sku[str(item["sku"])], price=str(item["price"]))
-                    for item in prices
+                    variant_payload(variants_by_sku[str(item["sku"])], **as_dict(item.get("fields")))
+                    for item in skus
                     if str(item.get("sku")) in variants_by_sku
                 ]
                 if payloads:
                     await client.upsert_variants(ctx.user_id, ctx.tenant_id, product_id, payloads)
         except DataPipelineError as exc:
             raise pipeline_failure(exc) from exc
-        return f"restored {plural(len(fields) + len(prices), 'previous value')} of catalog item {product_id}"
+        restored = len(fields) + sum(len(as_dict(item.get("fields"))) for item in skus)
+        return f"restored {plural(restored, 'previous value')} of catalog item {product_id}"
 
     # ------------------------------------------------------------------ stock
     async def owner_or_admin(ctx: AgentContext, args: ToolInput) -> None:
@@ -803,7 +872,30 @@ def catalog_write_tools(client: DataPipelineClient, directory: WorkspaceDirector
 
     async def release_preview(ctx: AgentContext, args: ToolInput) -> dict[str, Any]:
         assert isinstance(args, ReleaseStockArgs)
-        return {"kind": "stock_release", "reservation_id": args.reservation_id}
+        try:
+            rows = await client.stock_movements(
+                ctx.user_id, ctx.tenant_id, {"ref_id": args.reservation_id, "reason": ["RESERVE", "RELEASE"], "limit": 200}
+            )
+        except DataPipelineError as exc:
+            if exc.status in (400, 422):
+                raise ToolInputError(f"'{args.reservation_id}' is not a reservation id") from exc
+            raise pipeline_failure(exc) from exc
+        entries = [as_dict(row) for row in as_list(as_dict(rows).get("items"))]
+        held = [row for row in entries if row.get("reason") == "RESERVE"]
+        if not held:
+            raise ToolInputError(f"there is no reservation {args.reservation_id} in this workspace; list_stock_reservations shows the open ones")
+        if any(row.get("reason") == "RELEASE" for row in entries):
+            raise ToolInputError(f"reservation {args.reservation_id} was already released")
+        return {
+            "kind": "stock_release",
+            "reservation_id": args.reservation_id,
+            "sku": held[0].get("sku"),
+            "product": held[0].get("product_name"),
+            "quantity": sum(int(row.get("delta") or 0) for row in held),
+            "locations": [{"location": row.get("location_name"), "quantity": row.get("delta")} for row in held],
+            "reserved_at": min(str(row.get("at")) for row in held),
+            "reserved_by_you": all(str(row.get("created_by")) == str(ctx.user_id) for row in held),
+        }
 
     # ------------------------------------------------------------------ retire
     async def retire(ctx: AgentContext, product_id: str, name: str) -> str:
@@ -862,7 +954,7 @@ def catalog_write_tools(client: DataPipelineClient, directory: WorkspaceDirector
             await client.update_product(ctx.user_id, ctx.tenant_id, product_id, {"status": status})
             current = await product(ctx, product_id)
             payloads = [
-                _variant_payload(as_dict(v), status=wanted[str(as_dict(v).get("sku"))])
+                variant_payload(as_dict(v), status=wanted[str(as_dict(v).get("sku"))])
                 for v in as_list(current.get("variants"))
                 if wanted.get(str(as_dict(v).get("sku"))) not in (None, as_dict(v).get("status"))
             ]
@@ -877,8 +969,9 @@ def catalog_write_tools(client: DataPipelineClient, directory: WorkspaceDirector
         ToolDefinition(
             name="create_catalog_item",
             description=(
-                "Add a product or service to the workspace catalog, optionally with sellable SKUs and prices. New items "
-                "start as DRAFT unless status ACTIVE is given. The category must be an existing catalog category."
+                "Add a product or service to the workspace catalog, optionally with sellable SKUs and prices. SKUs "
+                "may have options (e.g. Size and Color); every SKU names the same options. New items start as DRAFT "
+                "unless status ACTIVE is given. The category must be an existing catalog category."
             ),
             input_model=CreateCatalogItemArgs,
             handler=create_catalog_item,
@@ -889,8 +982,9 @@ def catalog_write_tools(client: DataPipelineClient, directory: WorkspaceDirector
         ToolDefinition(
             name="update_catalog_item",
             description=(
-                "Change a catalog item's details, status (DRAFT/ACTIVE), discount limits or SKU prices. Only the fields "
-                "you pass change. To remove an item use retire_catalog_item."
+                "Change a catalog item's details, type, status (DRAFT/ACTIVE), discount limits, or its SKUs' price, "
+                "currency, barcode, weight or status (retire or reactivate one SKU). Only the fields you pass change. "
+                "To remove a whole item use retire_catalog_item; to add SKUs use add_catalog_skus."
             ),
             input_model=UpdateCatalogItemArgs,
             handler=update_catalog_item,
@@ -915,7 +1009,7 @@ def catalog_write_tools(client: DataPipelineClient, directory: WorkspaceDirector
             name="correct_stock_count",
             description=(
                 "Replace a SKU's on-hand count at a location with a physical count, with a note saying why. Only workspace "
-                "owners and admins may; call check_inventory first and pass the on-hand figure it showed."
+                "owners and admins may; call check_inventory first and pass the on-hand figure it shows for that location."
             ),
             input_model=CorrectStockCountArgs,
             handler=correct_stock_count,
@@ -965,30 +1059,31 @@ def catalog_write_tools(client: DataPipelineClient, directory: WorkspaceDirector
     ]
 
 
-def _variant_payload(variant: dict[str, Any], **overrides: Any) -> dict[str, Any]:
-    """A variant's full current state for the upsert, with ``overrides`` applied."""
-    payload = {
-        "sku": variant.get("sku"),
-        "barcode": variant.get("barcode"),
-        "price": str(variant.get("price")),
-        "currency": variant.get("currency") or "USD",
-        "weight": variant.get("weight"),
-        "status": variant.get("status") or "ACTIVE",
-        "option_value_ids": [str(value.get("id")) for value in map(as_dict, as_list(variant.get("option_values"))) if value.get("id")],
+def new_variant_payload(item: NewVariantArgs, ids: dict[tuple[str, str], str]) -> dict[str, Any]:
+    """A new SKU for the upsert; ``KeyError`` when one of its option values has no id."""
+    return {
+        "sku": item.sku,
+        "price": money(item.price),
+        "currency": item.currency,
+        "barcode": (item.barcode or "").strip() or None,
+        "weight": money(item.weight) if item.weight is not None else None,
+        "status": "ACTIVE",
+        "option_value_ids": [ids[(choice.name.lower(), choice.value.lower())] for choice in item.options],
     }
-    return payload | overrides
 
 
-def _money(value: float) -> str:
-    return str(Decimal(str(value)).quantize(Decimal("0.01")))
-
-
-def _pct(value: float) -> str:
-    return str(Decimal(str(value)).quantize(Decimal("0.01")))
-
-
-def _same_number(left: Any, right: Any) -> bool:
-    try:
-        return Decimal(str(left)) == Decimal(str(right))
-    except (InvalidOperation, ValueError):
-        return False
+def _sku_overrides(existing: dict[str, Any], change: SkuChangeArgs) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(the SKU fields this change sets, the values they replace), leaving out fields that wouldn't change."""
+    overrides: dict[str, Any] = {}
+    replaced: dict[str, Any] = {}
+    if change.price is not None and not same_number(existing.get("price"), change.price):
+        overrides["price"], replaced["price"] = money(change.price), str(existing.get("price"))
+    if change.currency is not None and change.currency != existing.get("currency"):
+        overrides["currency"], replaced["currency"] = change.currency, existing.get("currency")
+    if change.barcode is not None and (change.barcode.strip() or None) != existing.get("barcode"):
+        overrides["barcode"], replaced["barcode"] = change.barcode.strip() or None, existing.get("barcode")
+    if change.weight is not None and not same_number(existing.get("weight"), change.weight):
+        overrides["weight"], replaced["weight"] = money(change.weight), existing.get("weight")
+    if change.status is not None and change.status != existing.get("status"):
+        overrides["status"], replaced["status"] = change.status, existing.get("status")
+    return overrides, replaced
