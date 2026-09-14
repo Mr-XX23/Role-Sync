@@ -3,6 +3,7 @@ package com.role_sync.workspace.services;
 import com.role_sync.workspace.clients.AuthAccountClient;
 import com.role_sync.workspace.clients.AuthAccountClient.PlatformAccess;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
@@ -43,6 +44,8 @@ public class PlatformAdminGuard {
     private final Clock clock;
     private final Map<UUID, Cached> cache = new ConcurrentHashMap<>();
 
+    /** The constructor Spring uses; the package-private one lets tests pin the TTL and clock. */
+    @Autowired
     public PlatformAdminGuard(AuthAccountClient accounts) {
         this(accounts, DEFAULT_TTL, Clock.systemUTC());
     }
