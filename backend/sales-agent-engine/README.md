@@ -17,13 +17,16 @@ approval before any real-world action.
 | 3 | Write tools (calendar, Slack, Notion, documents + quotes saved to Drive or the knowledge base, catalog + stock) and guardrails (turn limits + loop detection, retry/timeout, circuit breaker, undo with approval, approval TTL, per-workspace budgets) | done |
 | 4 | Context manager (prompt budget, summaries, offloaded results), versioned memory with optimistic locking (rep, customer, deal, conversation), deals in workspace-service, "what the agent remembers" review | done |
 | 5 | Sub-agents: research, outreach and quote, handed work with `delegate`, each scoped at the gate, result-only back to the planner | done |
+| — | Skills: playbooks the agent follows (10 built in, workspace and private skills, per-rep switches, versions, SKILL.md import/export, AI drafts, usage), loaded with `use_skill`, picked in chat or handed to sub-agents | done |
 | 6 | Autonomy layer | next |
 
 ## Layout
 
 ```
 app/
-  api/            chat, sessions, SSE stream, approvals, memory, health + identity dependencies
+  api/            chat, sessions, SSE stream, approvals, memory, skills, health + identity dependencies
+  skills/         builtin/*.md (the shipped playbooks), service.py (who sees, changes and uses which skill,
+                  what the agent is told), store.py (skills, versions, switches, usage), skillmd.py (SKILL.md)
   engine/         orchestrator (plan → act → compensate graph, and a step for each running sub-agent),
                   delegation (sub-agents: what each is for, its prompt and what its result carries),
                   runner (start / pause / resume / recovery /
@@ -145,6 +148,24 @@ comes back to the planner — never its steps.
   pause runs on its own.
 - A sub-agent gets `max_steps` model steps (6) and is told to answer with what it has on its last one;
   the turn's own limits (steps, tool calls, tokens, loop detection) cover everything on top of that.
+- `delegate` can hand over a **skill** with the task: the sub-agent loads it (a `use_skill` call under its
+  own name) before its first step.
+
+## Skills
+
+A skill is a playbook for one recurring sales job: the steps, what to check, and what a good result looks
+like. Skills guide the agent; they never add tools or skip approvals.
+
+| Piece | Where | Behaviour |
+|---|---|---|
+| Built-in skills | `skills/builtin/*.md` | Ten SKILL.md files ship with the code (prospect research, lead qualification, outreach sequence, discovery prep, meeting follow-up, objection handling, competitive positioning, quote and proposal, negotiation plan, pipeline review), on for everyone. A test checks they name only real tools. An owner or admin can customize one for the workspace (a `builtin_key` row) and reset it. |
+| Who writes | `skills/service.py` | Owners and admins write workspace skills; members and above write private skills that only their own agent uses; viewers read. Private skills are invisible to everyone else, admins included. Limits: 40 workspace, 20 private per rep, 12,000-character instructions. |
+| Switches | `agent.skill_setting` | Every skill is on until switched off. A rep switches skills for their own agent; an owner or admin can switch a built-in or workspace skill off for everyone. At most 30 on per rep. |
+| What the agent sees | `engine/orchestrator.py` | Each planning step lists the rep's switched-on skills (id, name, when to use it). The model loads one with `use_skill` (a read: no approval, audited) and follows it. A skill the rep picked for a request (`POST /chat` `skill`) is loaded before the model's first step, as the same `use_skill` call. |
+| Versions | `agent.skill_version` | Every save is a new version, written only if the skill is still at the version the editor loaded (409 otherwise). Any version can be restored as the newest. Archiving and resetting keep everything; archived skills can be restored. |
+| SKILL.md | `skills/skillmd.py` | Export downloads the Anthropic Agent Skills format; import previews a file first (only its instructions come in, tools this agent doesn't have are dropped with a warning). |
+| AI drafts | `POST /skills/draft` | One sentence becomes an editable SKILL.md draft (one model call, `SALES_AGENT_SKILL_DRAFTS_PER_DAY` per rep). Nothing is saved until the rep saves it. |
+| Usage | `agent.skill_usage` | Each load is counted as chosen by the agent, picked by the rep, or handed to a sub-agent. |
 
 ## Context and memory
 
@@ -179,7 +200,7 @@ here until it expires (up to 60 min), because revocation lives only inside auth-
 
 | Method | Path | |
 |---|---|---|
-| POST | `/chat` | `{"message", "session_id"?, "time_zone"?}` → 202 `{session_id, status, events_url}` (429 over a workspace budget) |
+| POST | `/chat` | `{"message", "session_id"?, "time_zone"?, "skill"?}` → 202 `{session_id, status, events_url}` (429 over a workspace budget; `skill` is a skill ref the rep picked) |
 | GET | `/sessions` | the caller's sessions in the workspace |
 | GET | `/sessions/{id}` | transcript, open approvals, and `last_event_id` to subscribe after |
 | GET | `/sessions/{id}/events` | SSE: `{type, session_id, data, ts}` envelopes; resume with `Last-Event-ID` or `?last_event_id=` |
@@ -188,6 +209,11 @@ here until it expires (up to 60 min), because revocation lives only inside auth-
 | GET | `/memory/rep` | what the agent remembers about the caller; private to them |
 | GET | `/memory/accounts`, `/memory/account?company=`, `/memory/deals/{id}` | customer knowledge shared by the workspace |
 | DELETE | `/memory/rep/facts/{id}`, `/memory/accounts/{key}/facts/{id}`, `/memory/deals/{id}/facts/{id}` | forget one fact (shared memory: every member except viewers) |
+| GET | `/skills`, `/skills/{ref}`, `/skills/tools`, `/skills/archived` | the skills the caller can see with their switches and usage; one with its instructions; tools a skill may name; archived skills they can restore |
+| POST | `/skills`, `/skills/import/preview`, `/skills/draft` | create (`visibility` WORKSPACE: owners and admins); read a SKILL.md file; draft one with AI (nothing saved) |
+| PUT | `/skills/{ref}` (`expected_version`), `/skills/{ref}/enabled`, `/skills/{ref}/workspace-enabled` | save a new version (a built-in: customize it); the caller's switch; the switch for everyone (owners and admins) |
+| DELETE | `/skills/{ref}` | archive (a customized built-in: reset it) |
+| GET / POST | `/skills/{ref}/versions`, `/skills/{ref}/versions/{n}/restore`, `/skills/archived/{id}/restore`, `/skills/{ref}/export` | history; restore a version; bring an archived skill back; download SKILL.md |
 | GET | `/health`, `/health/ready` | liveness, and readiness (database + Redis) |
 
 Event types: `user_message` (the prompt that started a turn), `step_started`, `token` (`reset: true`

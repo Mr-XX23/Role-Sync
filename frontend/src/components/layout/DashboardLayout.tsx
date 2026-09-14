@@ -12,6 +12,7 @@ import {
   MessagesSquare,
   Handshake,
   UserCog,
+  WandSparkles,
 } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import type { SidebarItem } from './Sidebar';
@@ -45,6 +46,12 @@ export const DashboardLayout: React.FC = () => {
               label: 'Sales Agent',
               icon: MessagesSquare,
               path: '/salesman/sales-agent',
+            },
+            {
+              id: 'skills',
+              label: 'Agent Skills',
+              icon: WandSparkles,
+              path: '/salesman/skills',
             },
             {
               id: 'deals',

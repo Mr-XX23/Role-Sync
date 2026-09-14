@@ -17,6 +17,10 @@
   own short conversation lives in ``delegations`` in this state, so a write inside it pauses and
   resumes like any other; only its result goes back to the planner. Its tools come from its scope
   and are enforced at the gate, and read-only sub-agents can run side by side.
+- Skills: the planner's instructions list the rep's switched-on skills, and the model loads one with
+  ``use_skill`` when a request matches. A skill the rep picked for a request is loaded before the first
+  model step, as a ``use_skill`` call through the gate (audited, shown in the transcript like any
+  call); a skill handed to a sub-agent is loaded the same way before its first step.
 - Guardrails: per-turn limits on model steps, tool calls and tokens, and loop detection,
   checked before each model call and before running what the model asked for. A breach
   ends the turn HALTED with an explanation instead of spinning.
@@ -60,6 +64,8 @@ from app.models.types import (
     ToolSpec,
 )
 from app.platform.langgraph_runtime import END, GraphSpec, current_context, is_control_flow_signal
+from app.skills.service import SKILL_TOOL, SkillService
+from app.tools.adapters.skills import PICKED_CALL_SUFFIX
 from app.tools.gate import ToolGate
 from app.tools.registry import AgentScopes, ToolRegistry
 from app.tools.types import ToolKind, ToolResult
@@ -164,10 +170,13 @@ class OrchestratorState(TypedDict, total=False):
     wrap_up: bool  # after an undo decision: the model may only report back, not act again this turn
     delegations: list[dict[str, Any]]  # sub-agents running right now, each with its own conversation
     replan: bool  # a sub-agent just finished: the planner decides what to do with its result
+    picked_skill: dict[str, str] | None  # {"slug", "name"} of a skill the rep picked for this request
+    picked_skill_loaded: bool  # its use_skill call has been made
 
 
-def turn_input(user_message: str, *, time_zone: str | None = None) -> dict[str, Any]:
-    """Graph input for a new user turn (also resets per-turn bookkeeping)."""
+def turn_input(user_message: str, *, time_zone: str | None = None, skill: dict[str, str] | None = None) -> dict[str, Any]:
+    """Graph input for a new user turn (also resets per-turn bookkeeping). ``skill``: the skill the rep
+    picked for this request ({"slug", "name"}), loaded before the model's first step."""
     update: dict[str, Any] = {
         "messages": [Message(role=Role.USER, content=user_message).to_dict()],
         "pending_calls": [],
@@ -181,6 +190,8 @@ def turn_input(user_message: str, *, time_zone: str | None = None) -> dict[str, 
         "wrap_up": False,
         "delegations": [],
         "replan": False,
+        "picked_skill": skill,
+        "picked_skill_loaded": False,
     }
     if time_zone:
         update["time_zone"] = time_zone
@@ -201,6 +212,7 @@ class Orchestrator:
         compensator: Compensator | None = None,
         budgets: TenantBudgets | None = None,
         context: ContextManager | None = None,
+        skills: SkillService | None = None,
     ) -> None:
         self._router = router
         self._gate = gate
@@ -212,6 +224,7 @@ class Orchestrator:
         self._compensator = compensator
         self._budgets = budgets
         self._context = context
+        self._skills = skills
 
     def graph_spec(self) -> GraphSpec:
         return GraphSpec(
@@ -237,10 +250,18 @@ class Orchestrator:
         if halt is not None:
             return _halted(halt, steps=steps_taken)
 
+        picked = state.get("picked_skill")
+        if picked and not state.get("picked_skill_loaded") and self._registry.get(SKILL_TOOL) is not None:
+            return _load_picked_skill(state, picked)
+
         steps = steps_taken + 1
         wrap_up = bool(state.get("wrap_up"))
         await emit_best_effort(self._events, ctx.session_id, EventType.STEP_STARTED, {"step": "planning", "number": steps})
         system = SYSTEM_PROMPT.format(time_context=_time_context(state.get("time_zone")))
+        if self._skills is not None and self._registry.get(SKILL_TOOL) is not None:
+            index = await self._skills.index_text(ctx.tenant_id, ctx.user_id)
+            if index:
+                system = f"{system}\n\n{index}"
         if wrap_up:
             system = f"{system}\n\n{WRAP_UP_NOTE}"
         tools = self._tool_specs()
@@ -499,6 +520,23 @@ class Orchestrator:
 
     async def _subagent_step(self, ctx: AgentContext, delegation: dict[str, Any], state: dict[str, Any]) -> _SubStep:
         agent = SUBAGENTS[delegation["agent"]]
+        if delegation.get("skill") and not delegation.get("skill_loaded") and self._registry.get(SKILL_TOOL) is not None:
+            # The skill it was handed comes first: a use_skill call under the sub-agent's own name.
+            call = ToolCall(id=f"skill_{len(delegation.get('messages') or [])}", name=SKILL_TOOL, arguments={"skill": delegation["skill"]})
+            messages = [*(delegation.get("messages") or []), Message(role=Role.ASSISTANT, content="", tool_calls=(call,)).to_dict()]
+            return _SubStep(
+                delegation={**delegation, "messages": messages, "skill_loaded": True},
+                calls=[
+                    {
+                        **call.to_dict(),
+                        "gate_call_id": f"{delegation['id']}|{len(messages)}-0-{call.id}",
+                        "agent": agent.name,
+                        "delegation": delegation["id"],
+                    }
+                ],
+                answer=None,
+                tokens=0,
+            )
         history = [Message.from_dict(item) for item in delegation.get("messages") or []]
         steps = int(delegation.get("steps") or 0) + 1
         last = steps >= agent.max_steps
@@ -656,6 +694,21 @@ def _wrap_up_text(history: list[dict[str, Any]]) -> str:
             detail = result.get("summary") or result.get("error") or str(result.get("outcome", "")).lower()
             return f"An action didn't go through, so I stopped this request. Undo: {detail}. How would you like to continue?"
     return "An action didn't go through, so I stopped this request. How would you like to continue?"
+
+
+def _load_picked_skill(state: dict[str, Any], picked: dict[str, str]) -> dict[str, Any]:
+    """The first step of a request the rep picked a skill for: a use_skill call, run through the gate
+    before the model plans, so the model starts with the playbook in front of it."""
+    position = len(state.get("messages") or [])
+    call = ToolCall(id=f"skill_{position}", name=SKILL_TOOL, arguments={"skill": str(picked.get("slug") or "")})
+    return {
+        "messages": [Message(role=Role.ASSISTANT, content="", tool_calls=(call,)).to_dict()],
+        "pending_calls": [{**call.to_dict(), "gate_call_id": f"{position}-0{PICKED_CALL_SUFFIX}", "agent": AGENT_NAME}],
+        "tool_calls": int(state.get("tool_calls") or 0) + 1,
+        "picked_skill_loaded": True,
+        "final_answer": None,
+        "replan": False,
+    }
 
 
 def _halted(halt: Halt, *, steps: int) -> dict[str, Any]:

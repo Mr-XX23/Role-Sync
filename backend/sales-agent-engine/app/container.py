@@ -42,6 +42,8 @@ from app.platform.langgraph_runtime import GraphApprovalPort, GraphRuntime, Grap
 from app.platform.redis import create_redis
 from app.platform.web_search import TavilySearch
 from app.platform.workspace_client import DealsClient, RepProfileClient, WorkspaceDirectory, WorkspaceRecordsClient
+from app.skills.service import SKILL_TOOL, SkillService
+from app.skills.store import SkillStore
 from app.tools.adapters.catalog import catalog_tools
 from app.tools.adapters.catalog_writes import catalog_write_tools
 from app.tools.adapters.deals import deal_tools
@@ -53,6 +55,7 @@ from app.tools.adapters.knowledge_writes import knowledge_write_tools
 from app.tools.adapters.memory import memory_tools
 from app.tools.adapters.notion import notion_tools
 from app.tools.adapters.quotes import quote_tools
+from app.tools.adapters.skills import skill_tools
 from app.tools.adapters.slack import slack_tools
 from app.tools.adapters.web import WebResearch, web_tools
 from app.tools.documents.storage import DocumentStore
@@ -90,6 +93,7 @@ class Container:
     blobs: BlobStore
     context: ContextManager
     deals: DealsClient
+    skills: SkillService
     runner: Any = None  # SessionRunner; tests may substitute a double
     _exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack, repr=False)
 
@@ -248,8 +252,20 @@ async def build_container(
         for definition in memory_tools(memory, blobs, workspaces, deals, facts_per_key=settings.memory_facts_per_key):
             if registry.get(definition.name) is None:
                 registry.register(definition)
+        skills = SkillService(
+            store=SkillStore(sessionmaker),
+            directory=workspaces,
+            registry=registry,
+            router=model_router,
+            redis=redis,
+            key_prefix=settings.redis_key_prefix,
+            drafts_per_day=settings.skill_drafts_per_day,
+        )
+        if registry.get(SKILL_TOOL) is None:  # skills, like memory, live in the engine
+            for definition in skill_tools(skills):
+                registry.register(definition)
         if registry.get(DELEGATE_TOOL) is None:  # sub-agents are part of the engine, not of any vendor
-            registry.register(delegate_tool())
+            registry.register(delegate_tool(skills))
         scopes = AgentScopes()
         sessions = SessionRepository(sessionmaker)
         pending_actions = PendingActionRepository(sessionmaker)
@@ -341,6 +357,7 @@ async def build_container(
             blobs=blobs,
             context=context,
             deals=deals,
+            skills=skills,
             _exit_stack=stack,
         )
         orchestrator = Orchestrator(
@@ -359,6 +376,7 @@ async def build_container(
             compensator=compensator,
             budgets=budgets,
             context=context,
+            skills=skills,
         )
         spec = graph_factory(container) if graph_factory is not None else orchestrator.graph_spec()
         container.runner = SessionRunner(

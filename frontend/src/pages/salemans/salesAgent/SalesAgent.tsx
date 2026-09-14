@@ -1,9 +1,12 @@
 import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import { Brain, History, MessageSquarePlus, Sparkles } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { AlertTriangle, Brain, History, MessageSquarePlus, Sparkles, X } from 'lucide-react';
 import { useToast } from '../../../context/ToastContext';
 import { useAppSelector } from '../../../store';
 import { describeAgentError, salesAgentApi } from '../../../api/salesAgentApi';
 import type { AgentEventType, Decision, SessionStatus, SessionSummary } from '../../../api/salesAgentApi';
+import { skillsApi } from '../../../api/skillsApi';
+import type { Skill } from '../../../api/skillsApi';
 import { ApprovalCard } from './ApprovalCard';
 import type { Attachment } from './attachments';
 import { attachmentNote, releaseAttachment, uploadAttachments, waitForIndexed } from './attachments';
@@ -56,8 +59,32 @@ export const SalesAgent: React.FC = () => {
   const [deciding, setDeciding] = useState<string | null>(null);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [skills, setSkills] = useState<Skill[] | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
   const role = useAppSelector((state) => state.workspace.currentWorkspace?.role);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // "Try in chat" on the Skills page links here with ?skill=<ref>; a pick in the composer replaces it. The pick is
+  // kept in state, not only the URL, because router updates render late and a quick send would miss the new pick.
+  const [picked, setPicked] = useState<{ ref: string | null } | null>(null);
+  const pickedRef = picked ? picked.ref : searchParams.get('skill');
+  const pickedSkill = pickedRef ? (skills?.find((skill) => skill.ref === pickedRef) ?? null) : null;
+  const pickedUnavailable = Boolean(pickedRef && skills && !pickedSkill);
+
+  const pickSkill = (skill: Skill | null) => {
+    setPicked({ ref: skill?.ref ?? null });
+    if (searchParams.has('skill')) {
+      // Drop the link's pick so a reload doesn't bring it back.
+      setSearchParams(
+        (params) => {
+          const next = new URLSearchParams(params);
+          next.delete('skill');
+          return next;
+        },
+        { replace: true }
+      );
+    }
+  };
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -74,6 +101,13 @@ export const SalesAgent: React.FC = () => {
       .then((rows) => {
         if (active) setSessions(rows);
       })
+      .catch(() => undefined);
+    skillsApi
+      .list()
+      .then((list) => {
+        if (active) setSkills(list.skills.filter((skill) => skill.enabled));
+      })
+      // Skills are optional: without the list, the picker just stays hidden.
       .catch(() => undefined);
     return () => {
       active = false;
@@ -116,6 +150,7 @@ export const SalesAgent: React.FC = () => {
     setStreamAfter(null);
     setInput('');
     replaceAttachments([]);
+    if (pickedRef) pickSkill(null);
   };
 
   const blocked = phase !== 'idle' || chat.status === 'RUNNING' || chat.status === 'AWAITING_APPROVAL';
@@ -124,11 +159,16 @@ export const SalesAgent: React.FC = () => {
 
   const send = async () => {
     const text = input.trim();
-    if ((!text && attachments.length === 0) || blocked) {
+    const skill = pickedSkill;
+    if ((!text && attachments.length === 0 && !skill) || blocked) {
       return;
     }
-    let message = text || 'Please look at the attached files and tell me what matters in them.';
     const pendingAttachments = attachments;
+    let message =
+      text ||
+      (skill
+        ? `Use the “${skill.name}” skill${pendingAttachments.length ? ' with the attached files' : ''}.`
+        : 'Please look at the attached files and tell me what matters in them.');
     try {
       if (pendingAttachments.length > 0) {
         setPhase('uploading');
@@ -148,10 +188,11 @@ export const SalesAgent: React.FC = () => {
       setPhase('sending');
       setProgress(null);
       dispatch({ type: 'sending', message });
-      const started = await salesAgentApi.startChat(message, chat.sessionId);
+      const started = await salesAgentApi.startChat(message, chat.sessionId, skill?.ref);
       dispatch({ type: 'started', sessionId: started.session_id });
       setInput('');
       replaceAttachments([]);
+      if (skill) pickSkill(null); // a pick is for one message
       void refreshSessions();
     } catch (error) {
       dispatch({ type: 'send_failed' });
@@ -184,20 +225,47 @@ export const SalesAgent: React.FC = () => {
   const empty = chat.items.length === 0 && !chat.draft && !chat.outgoing && pending.length === 0 && !chat.error;
 
   const composer = (variant: 'hero' | 'docked') => (
-    <Composer
-      variant={variant}
-      value={input}
-      onChange={setInput}
-      attachments={attachments}
-      onAttachmentsChange={replaceAttachments}
-      onSend={() => void send()}
-      onReject={(message) => toast.warning(message)}
-      blocked={blocked}
-      blockedReason={blockedReason}
-      phase={phase}
-      progress={progress}
-      autoFocus={variant === 'hero'}
-    />
+    <>
+      {pickedUnavailable && (
+        <div
+          role="status"
+          className="mb-2 flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-200"
+        >
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          <span className="flex-1 min-w-0">
+            The skill in this link isn’t switched on for your agent, so it won’t be used.{' '}
+            <Link to="/salesman/skills" className="font-semibold underline underline-offset-2">
+              Open Agent Skills
+            </Link>
+          </span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => pickSkill(null)}
+            className="p-0.5 rounded-md hover:bg-amber-500/20 transition-colors cursor-pointer shrink-0"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+      <Composer
+        variant={variant}
+        value={input}
+        onChange={setInput}
+        attachments={attachments}
+        onAttachmentsChange={replaceAttachments}
+        onSend={() => void send()}
+        onReject={(message) => toast.warning(message)}
+        blocked={blocked}
+        blockedReason={blockedReason}
+        phase={phase}
+        progress={progress}
+        autoFocus={variant === 'hero'}
+        skills={skills}
+        skill={pickedSkill}
+        onSkillChange={pickSkill}
+      />
+    </>
   );
 
   return (

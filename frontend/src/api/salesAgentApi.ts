@@ -140,11 +140,12 @@ function tenantHeaders() {
 }
 
 export const salesAgentApi = {
-  startChat: async (message: string, sessionId?: string | null) => {
+  /** ``skill`` is the ref of a skill the rep picked for this message (see skillsApi). */
+  startChat: async (message: string, sessionId?: string | null, skill?: string | null) => {
     const response = await api.post<{ session_id: string; status: SessionStatus; events_url: string }>(
       `${BASE}/chat`,
       // The rep's time zone lets the agent schedule meetings at the times they mean.
-      { message, session_id: sessionId ?? null, time_zone: browserTimeZone() },
+      { message, session_id: sessionId ?? null, time_zone: browserTimeZone(), skill: skill ?? null },
       { headers: tenantHeaders() }
     );
     return response.data;
