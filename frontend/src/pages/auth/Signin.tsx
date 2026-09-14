@@ -3,6 +3,7 @@ import { ArrowRight, LogOut, Home, Mail, MessageCircle, UserRoundKey, Sparkles, 
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
+import { LegalLinks } from '../../components/common/LegalLinks';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { loginUser, logoutUser, clearError } from '../../store/authSlice';
 
@@ -25,12 +26,7 @@ const Signin: React.FC = () => {
 
   React.useEffect(() => {
     if (isAuthenticated && user) {
-      const savedRole = localStorage.getItem('rolesync-active-role');
-      let targetRoute = '/select-role';
-      if (savedRole === 'sales') targetRoute = '/salesman';
-      else if (savedRole === 'teacher') targetRoute = '/teacher';
-      else if (savedRole === 'student') targetRoute = '/student';
-      navigate(targetRoute, { replace: true });
+      navigate('/salesman', { replace: true });
     }
   }, [isAuthenticated, user, navigate]);
 
@@ -101,7 +97,7 @@ const Signin: React.FC = () => {
                 <Button
                   variant="outline"
                   className="w-full flex items-center justify-center gap-2"
-                  onClick={() => navigate('/select-role')}
+                  onClick={() => navigate('/salesman')}
                   icon={<Home className="w-[16px] h-[16px]" />}
                 >
                   Home
@@ -287,6 +283,7 @@ const Signin: React.FC = () => {
           <p className="font-mono text-[12px] text-muted-foreground/90">
             © {new Date().getFullYear()} RoleSync AI.
           </p>
+          <LegalLinks />
         </div>
 
       </main>

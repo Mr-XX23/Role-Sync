@@ -12,6 +12,7 @@ import {
   PackagePlus,
   Receipt,
   ShieldCheck,
+  Truck,
   Undo2,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -38,7 +39,8 @@ const KINDS: Record<string, { title: string; approve: string; icon: LucideIcon }
   catalog_item: { title: 'Add this item to the catalog?', approve: 'Approve & add', icon: PackagePlus },
   catalog_update: { title: 'Update this catalog item?', approve: 'Approve & update', icon: Package },
   catalog_retire: { title: 'Retire this catalog item?', approve: 'Approve & retire', icon: Archive },
-  stock_change: { title: 'Change this stock level?', approve: 'Approve & change', icon: Boxes },
+  stock_change: { title: 'Correct this stock count?', approve: 'Approve & correct', icon: Boxes },
+  stock_movement: { title: 'Record this stock movement?', approve: 'Approve & record', icon: Truck },
   stock_reservation: { title: 'Reserve this stock?', approve: 'Approve & reserve', icon: PackagePlus },
   stock_release: { title: 'Release this reservation?', approve: 'Approve & release', icon: PackageMinus },
   undo: { title: 'Undo these actions?', approve: 'Undo them', icon: Undo2 },

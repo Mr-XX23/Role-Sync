@@ -25,6 +25,19 @@ def test_validate_upload_accepts_supported_types():
     assert guards.validate_upload("sheet.xlsx", 2048) == "XLSX"
 
 
+def test_validate_upload_accepts_images_for_ocr():
+    assert guards.validate_upload("whiteboard.png", 4096) == "PNG"
+    assert guards.validate_upload("scan.JPEG", 4096) == "JPEG"
+    assert guards.validate_upload("photo.webp", 4096) == "WEBP"
+
+
+def test_validate_upload_still_rejects_media():
+    for name in ("call.mp3", "demo.mp4", "clip.mov"):
+        with pytest.raises(guards.IngestionRejected) as err:
+            guards.validate_upload(name, 4096)
+        assert err.value.code == "UNSUPPORTED_TYPE"
+
+
 def test_validate_upload_rejects_unsupported_type():
     with pytest.raises(guards.IngestionRejected) as err:
         guards.validate_upload("payload.exe", 1024)

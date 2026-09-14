@@ -28,6 +28,7 @@ import { ProductDetailModal } from './ProductDetailModal';
 import { LocationsModal } from './LocationsModal';
 import { AdjustStockModal } from './AdjustStockModal';
 import { TransferStockModal } from './TransferStockModal';
+import { StockHistoryModal } from './StockHistoryModal';
 import { DeleteProductModal } from './DeleteProductModal';
 
 export const ProductManagement: React.FC = () => {
@@ -62,6 +63,12 @@ export const ProductManagement: React.FC = () => {
   const [transferStockTarget, setTransferStockTarget] = useState<{
     isOpen: boolean;
     sku?: string;
+  }>({ isOpen: false });
+
+  const [stockHistoryTarget, setStockHistoryTarget] = useState<{
+    isOpen: boolean;
+    variantId?: string;
+    locationId?: string;
   }>({ isOpen: false });
 
   const [dealStockCheckTarget, setDealStockCheckTarget] = useState<{
@@ -424,6 +431,9 @@ export const ProductManagement: React.FC = () => {
               setAdjustStockTarget({ isOpen: true, variantId, locationId })
             }
             onOpenTransferStock={(sku) => setTransferStockTarget({ isOpen: true, sku })}
+            onOpenStockHistory={(variantId, locationId) =>
+              setStockHistoryTarget({ isOpen: true, variantId, locationId })
+            }
             onOpenDealStockCheck={(sku) => setDealStockCheckTarget({ isOpen: true, sku })}
             onOpenLocations={() => setIsLocationsOpen(true)}
             onRefresh={() => loadCatalogData(true)}
@@ -469,17 +479,20 @@ export const ProductManagement: React.FC = () => {
         onLocationsUpdated={() => loadCatalogData(false)}
       />
 
-      {/* Quick Adjust Stock Modal */}
-      <AdjustStockModal
-        isOpen={adjustStockTarget.isOpen}
-        onClose={() => setAdjustStockTarget({ isOpen: false })}
-        onStockUpdated={() => loadCatalogData(false)}
-        variants={allVariants}
-        products={products}
-        locations={locations}
-        initialVariantId={adjustStockTarget.variantId}
-        initialLocationId={adjustStockTarget.locationId}
-      />
+      {/* Update Stock Modal (mounted per open, so each open starts from a clean form) */}
+      {adjustStockTarget.isOpen && (
+        <AdjustStockModal
+          isOpen
+          onClose={() => setAdjustStockTarget({ isOpen: false })}
+          onStockUpdated={() => loadCatalogData(false)}
+          variants={allVariants}
+          products={products}
+          locations={locations}
+          initialVariantId={adjustStockTarget.variantId}
+          initialLocationId={adjustStockTarget.locationId}
+          onOpenHistory={(variantId, locationId) => setStockHistoryTarget({ isOpen: true, variantId, locationId })}
+        />
+      )}
 
       {/* Transfer Stock Modal */}
       <TransferStockModal
@@ -491,6 +504,19 @@ export const ProductManagement: React.FC = () => {
         locations={locations}
         initialSku={transferStockTarget.sku}
       />
+
+      {/* Stock History & Totals Modal (opens over Update Stock) */}
+      {stockHistoryTarget.isOpen && (
+        <StockHistoryModal
+          isOpen
+          onClose={() => setStockHistoryTarget({ isOpen: false })}
+          variants={allVariants}
+          products={products}
+          locations={locations}
+          initialVariantId={stockHistoryTarget.variantId}
+          initialLocationId={stockHistoryTarget.locationId}
+        />
+      )}
 
       {/* Deal Stock Check Modal */}
       <DealStockCheckModal

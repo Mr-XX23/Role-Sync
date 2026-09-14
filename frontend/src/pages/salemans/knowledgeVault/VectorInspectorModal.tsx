@@ -160,22 +160,9 @@ export const VectorInspectorModal: React.FC<VectorInspectorModalProps> = ({
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-2 mt-0.5">
-                <p className="text-xs text-muted-foreground">
-                  Parent Doc Ref:{' '}
-                  <span className="font-mono text-foreground font-semibold">
-                    {vectorData?.doc_ref_id || docId}
-                  </span>
-                </p>
-                <button
-                  type="button"
-                  onClick={() => handleCopy('doc_ref', vectorData?.doc_ref_id || docId, 'Doc Ref ID')}
-                  className="text-muted-foreground hover:text-foreground cursor-pointer"
-                  title="Copy Document Reference ID"
-                >
-                  {copiedId === 'doc_ref' ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
-                </button>
-              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Semantic vector shards & document content viewer
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -270,24 +257,31 @@ export const VectorInspectorModal: React.FC<VectorInspectorModalProps> = ({
         {activeTab === 'chunks' ? (
           <>
             {/* Filter bar */}
-            <div className="px-6 py-3 border-b border-border/40 flex items-center gap-3">
+            <div className="px-6 py-3.5 border-b border-border/50 bg-background/50 flex items-center gap-3">
               <div className="relative flex-1">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Search className="w-4.5 h-4.5 absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
                 <input
                   type="text"
                   placeholder="Search vector text, chunk #, category, or competitor..."
                   value={chunkFilter}
                   onChange={(e) => setChunkFilter(e.target.value)}
-                  className="w-full pl-9 pr-4 py-2 bg-background border border-border rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+                  className="w-full pl-10 pr-10 py-2.5 bg-background border border-border/80 hover:border-border rounded-xl text-sm placeholder:text-muted-foreground/60 text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all shadow-2xs"
                 />
+                {chunkFilter && (
+                  <button
+                    type="button"
+                    onClick={() => setChunkFilter('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors cursor-pointer"
+                    title="Clear search"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
               {chunkFilter && (
-                <button
-                  onClick={() => setChunkFilter('')}
-                  className="text-xs text-muted-foreground hover:text-foreground underline cursor-pointer"
-                >
-                  Clear Filter
-                </button>
+                <span className="text-xs text-muted-foreground font-mono bg-muted/60 px-2.5 py-1.5 rounded-lg border border-border/60 shrink-0">
+                  {filteredChunks.length} {filteredChunks.length === 1 ? 'match' : 'matches'}
+                </span>
               )}
             </div>
 
@@ -325,13 +319,10 @@ export const VectorInspectorModal: React.FC<VectorInspectorModalProps> = ({
                       className="bg-muted/30 hover:bg-muted/50 border border-border/60 rounded-xl p-4 transition-all duration-200"
                     >
                       {/* Top Header of Chunk Card */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
                         <div className="flex items-center gap-2">
-                          <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-md bg-background text-primary border border-border/50">
+                          <span className="font-mono text-xs font-bold px-2.5 py-1 rounded-md bg-background text-primary border border-border/60 shadow-3xs">
                             Chunk #{chunk.chunk_index + 1} of {totalChunks}
-                          </span>
-                          <span className="font-mono text-[10px] text-muted-foreground">
-                            {chunk.chunk_id}
                           </span>
                         </div>
 
@@ -380,7 +371,7 @@ export const VectorInspectorModal: React.FC<VectorInspectorModalProps> = ({
                               type="button"
                               onClick={() => setChunkFilter(`chunk ${chunk.chunk_index}`)}
                               className="inline-flex items-center gap-1 text-primary hover:underline cursor-pointer bg-primary/5 px-2 py-0.5 rounded border border-primary/20"
-                              title={`Jump to previous chunk (${chunk.prev_chunk_id})`}
+                              title={`Jump to previous chunk`}
                             >
                               <ArrowLeft className="w-3 h-3" />
                               <span>Prev: Chunk #{chunk.chunk_index}</span>
@@ -392,17 +383,13 @@ export const VectorInspectorModal: React.FC<VectorInspectorModalProps> = ({
                           )}
                         </div>
 
-                        <div className="text-[10px] text-muted-foreground">
-                          Doc Ref: <span className="font-mono text-foreground font-semibold">{chunk.doc_ref_id || docId}</span>
-                        </div>
-
                         <div className="flex items-center gap-1.5">
                           {chunk.next_chunk_id ? (
                             <button
                               type="button"
                               onClick={() => setChunkFilter(`chunk ${chunk.chunk_index + 2}`)}
                               className="inline-flex items-center gap-1 text-primary hover:underline cursor-pointer bg-primary/5 px-2 py-0.5 rounded border border-primary/20"
-                              title={`Jump to next chunk (${chunk.next_chunk_id})`}
+                              title={`Jump to next chunk`}
                             >
                               <span>Next: Chunk #{chunk.chunk_index + 2}</span>
                               <ArrowRight className="w-3 h-3" />

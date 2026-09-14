@@ -3,6 +3,7 @@ import { Mail, ArrowRight, ArrowLeft, AlertCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
+import { LegalLinks } from '../../components/common/LegalLinks';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { resetPassword, clearResetState } from '../../store/authSlice';
 
@@ -181,6 +182,7 @@ const Passwordreset: React.FC = () => {
           <p className="font-mono text-[12px] text-muted-foreground/90">
             © {new Date().getFullYear()} RoleSync AI.
           </p>
+          <LegalLinks />
         </div>
 
       </main>

@@ -235,6 +235,158 @@ export interface TransferStockRequest {
   to_location_id: string;
   qty: number;
   note?: string | null;
+  reference?: string | null;
+}
+
+/** What happened to stock. Only COUNT_CORRECTION replaces a count (workspace owners and admins, with a note). */
+export type StockMovementType =
+  | 'RECEIVED'
+  | 'SOLD'
+  | 'SHIPPED'
+  | 'DAMAGED'
+  | 'LOST'
+  | 'RETURNED'
+  | 'COUNT_CORRECTION';
+
+/** Why a ledger row exists. RESERVE and RELEASE are holds and leave on-hand stock alone. */
+export type StockLedgerReason =
+  | 'RESTOCK'
+  | 'SALE'
+  | 'RESERVE'
+  | 'RELEASE'
+  | 'TRANSFER_IN'
+  | 'TRANSFER_OUT'
+  | 'ADJUST'
+  | 'DAMAGE'
+  | 'LOST'
+  | 'RETURN';
+
+/** How a ledger row reads: a shipment is SHIPPED_OUT at one location and SHIPPED_IN at the other. */
+export type StockEntryType =
+  | 'RECEIVED'
+  | 'SOLD'
+  | 'SHIPPED_OUT'
+  | 'SHIPPED_IN'
+  | 'DAMAGED'
+  | 'LOST'
+  | 'RETURNED'
+  | 'CORRECTION'
+  | 'RESERVED'
+  | 'RELEASED';
+
+export interface RecordMovementRequest {
+  type: StockMovementType;
+  variant_id: string;
+  /** Where it happened; for SHIPPED, where the stock leaves. */
+  location_id: string;
+  /** Units; for COUNT_CORRECTION, the counted quantity. */
+  qty: number;
+  to_location_id?: string | null;
+  resellable?: boolean;
+  /** COUNT_CORRECTION: the on-hand figure the count was checked against. */
+  expected_on_hand?: number | null;
+  counterparty?: string | null;
+  reference?: string | null;
+  note?: string | null;
+}
+
+export interface StockLevelChange {
+  location_id: string;
+  location_name: string;
+  qty_on_hand_before: number;
+  qty_on_hand: number;
+  qty_reserved: number;
+  qty_available: number;
+}
+
+export interface StockMovementEntry {
+  id: string;
+  at: string;
+  type: StockEntryType;
+  reason: StockLedgerReason;
+  delta: number;
+  on_hand_after?: number | null;
+  variant_id: string;
+  sku: string;
+  product_id: string;
+  product_name: string;
+  variant_label?: string | null;
+  location_id: string;
+  location_name: string;
+  other_location_id?: string | null;
+  other_location_name?: string | null;
+  counterparty?: string | null;
+  reference?: string | null;
+  note?: string | null;
+  ref_id?: string | null;
+  created_by?: string | null;
+}
+
+export interface RecordMovementResponse {
+  type: StockMovementType;
+  ref_id: string;
+  changed: boolean;
+  levels: StockLevelChange[];
+  movements: StockMovementEntry[];
+}
+
+export interface ListMovementsParams {
+  variant_id?: string;
+  location_id?: string;
+  reasons?: StockLedgerReason[];
+  /** ISO date-time, inclusive. */
+  date_from?: string;
+  /** ISO date-time, exclusive. */
+  date_to?: string;
+  include_holds?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export interface StockMovementHistoryResponse {
+  items: StockMovementEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface StockMovementTotals {
+  received: number;
+  sold: number;
+  shipped_out: number;
+  shipped_in: number;
+  damaged: number;
+  lost: number;
+  returned: number;
+  corrected_up: number;
+  corrected_down: number;
+  net_change: number;
+  movements: number;
+}
+
+export interface LocationStockSummary extends StockMovementTotals {
+  location_id: string;
+  location_name: string;
+  location_type: string;
+  sellable: boolean;
+  qty_on_hand: number;
+  qty_reserved: number;
+  qty_available: number;
+}
+
+export interface StockMovementSummaryResponse {
+  variant_id?: string | null;
+  date_from?: string | null;
+  date_to?: string | null;
+  locations: LocationStockSummary[];
+  totals: StockMovementTotals;
+}
+
+export interface MovementSummaryParams {
+  variant_id?: string;
+  location_id?: string;
+  date_from?: string;
+  date_to?: string;
 }
 
 export interface TransferStockResponse {
@@ -622,6 +774,41 @@ export const catalogApi = {
 
   transferStock: async (data: TransferStockRequest, tenantId?: string): Promise<TransferStockResponse> => {
     const response = await api.post<TransferStockResponse>('/catalog/inventory/transfer', data, {
+      headers: getHeaders(tenantId),
+    });
+    return response.data;
+  },
+
+  recordMovement: async (data: RecordMovementRequest, tenantId?: string): Promise<RecordMovementResponse> => {
+    const response = await api.post<RecordMovementResponse>('/catalog/inventory/movements', data, {
+      headers: getHeaders(tenantId),
+    });
+    return response.data;
+  },
+
+  listMovements: async (
+    params: ListMovementsParams = {},
+    tenantId?: string
+  ): Promise<StockMovementHistoryResponse> => {
+    const search = new URLSearchParams();
+    const { reasons, ...rest } = params;
+    Object.entries(rest).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') search.append(key, String(value));
+    });
+    (reasons ?? []).forEach((reason) => search.append('reason', reason));
+    const response = await api.get<StockMovementHistoryResponse>('/catalog/inventory/movements', {
+      params: search,
+      headers: getHeaders(tenantId),
+    });
+    return response.data;
+  },
+
+  getMovementSummary: async (
+    params: MovementSummaryParams = {},
+    tenantId?: string
+  ): Promise<StockMovementSummaryResponse> => {
+    const response = await api.get<StockMovementSummaryResponse>('/catalog/inventory/movements/summary', {
+      params,
       headers: getHeaders(tenantId),
     });
     return response.data;

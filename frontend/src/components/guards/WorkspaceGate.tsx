@@ -3,7 +3,6 @@ import { Loader2, LogOut, RefreshCw } from 'lucide-react';
 import { Button } from '../common/Button';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { logoutUser } from '../../store/authSlice';
-import { clearActiveRole } from '../../store/roleSlice';
 import { clearWorkspaceState, ensureWorkspace } from '../../store/workspaceSlice';
 
 /**
@@ -46,7 +45,6 @@ export const WorkspaceGate: React.FC<{ children: React.ReactNode }> = ({ childre
             className="px-4 py-2 text-xs w-auto"
             onClick={() => {
               void dispatch(logoutUser());
-              dispatch(clearActiveRole());
               dispatch(clearWorkspaceState()); // the next person to sign in here starts fresh
             }}
             icon={<LogOut className="w-3.5 h-3.5" />}

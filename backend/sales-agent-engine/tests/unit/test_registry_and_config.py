@@ -78,11 +78,12 @@ def test_every_write_tool_shows_the_reviewer_a_preview_and_says_how_to_undo_it()
     writes = {d.name: d for d in registry.all() if d.kind is ToolKind.WRITE}
     assert set(writes) == {
         "send_email", "create_calendar_event", "send_slack_message", "create_notion_page", "generate_document",
-        "create_quote", "create_catalog_item", "update_catalog_item", "set_stock", "reserve_stock", "release_stock",
-        "retire_catalog_item", "undo_actions", "create_deal", "update_deal",
+        "create_quote", "create_catalog_item", "update_catalog_item", "record_stock_movement", "correct_stock_count",
+        "reserve_stock", "release_stock", "retire_catalog_item", "undo_actions", "create_deal", "update_deal",
     }
     assert all(d.preview is not None for d in writes.values())
-    # Only these can't be reversed: a sent email, a released reservation, and an undo itself.
+    # Only these can't be reversed: a sent email, a released reservation, and an undo itself. (A stock movement
+    # has an undo handler for shipments; other movements report that they can't be undone.)
     assert {name for name, d in writes.items() if d.undo_handler is None} == {"send_email", "release_stock", "undo_actions"}
 
 
@@ -91,8 +92,8 @@ def test_sub_agent_scopes_stay_narrow_over_the_full_tool_set():
     scopes = AgentScopes()
     assert all(d.kind is ToolKind.READ for d in scopes.tools_for("research", registry))
     assert {d.name for d in scopes.tools_for("quote", registry) if d.kind is ToolKind.WRITE} == {
-        "generate_document", "create_quote", "create_catalog_item", "update_catalog_item", "set_stock",
-        "reserve_stock", "release_stock", "retire_catalog_item",
+        "generate_document", "create_quote", "create_catalog_item", "update_catalog_item", "record_stock_movement",
+        "correct_stock_count", "reserve_stock", "release_stock", "retire_catalog_item",
     }
     assert {d.name for d in scopes.tools_for("outreach", registry) if d.kind is ToolKind.WRITE} == {
         "send_email", "create_calendar_event", "send_slack_message", "create_notion_page",

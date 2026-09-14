@@ -93,7 +93,11 @@ def describe_action(tool: str, args: Any) -> tuple[str, str]:
         "create_catalog_item": (f"Add catalog item: {text('name')}", "CATALOG_CHANGE"),
         "update_catalog_item": ("Update catalog item", "CATALOG_CHANGE"),
         "retire_catalog_item": ("Retire catalog item", "CATALOG_CHANGE"),
-        "set_stock": (f"Set stock of {text('sku')} to {fields.get('quantity')}", "INVENTORY_CHANGE"),
+        "record_stock_movement": (
+            f"Stock {text('type').lower() or 'movement'}: {fields.get('quantity')} × {text('sku')}",
+            "INVENTORY_CHANGE",
+        ),
+        "correct_stock_count": (f"Correct stock count of {text('sku')} to {fields.get('counted_quantity')}", "INVENTORY_CHANGE"),
         "reserve_stock": (f"Reserve {fields.get('quantity')} × {text('sku')}", "INVENTORY_CHANGE"),
         "release_stock": ("Release a stock reservation", "INVENTORY_CHANGE"),
         "undo_actions": (f"Undo {len(fields.get('action_ids') or [])} completed action(s)", "UNDO"),

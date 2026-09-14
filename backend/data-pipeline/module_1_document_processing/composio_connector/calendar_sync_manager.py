@@ -120,7 +120,10 @@ class CalendarSyncManager:
         redirect_url = self.composio.initiate_user_connection(user_id=user_id, source="google_calendar", callback_url=callback_url)
         trigger_id = None
         if getattr(conn.config, "webhook_enabled", False):
-            trigger_id = self.composio.enable_trigger(trigger_slug=ComposioClient.CALENDAR_EVENT_SYNC, user_id=user_id)
+            trigger_id = self.composio.enable_trigger(
+                trigger_slug=getattr(ComposioClient, "CALENDAR_EVENT_SYNC", "GOOGLECALENDAR_GOOGLE_CALENDAR_EVENT_SYNC_TRIGGER"),
+                user_id=user_id,
+            )
 
         conn.webhook_trigger_id = trigger_id
         self.store.update_connection(conn)
@@ -215,7 +218,8 @@ class CalendarSyncManager:
             if conn.config.webhook_enabled:
                 if not conn.webhook_trigger_id:
                     conn.webhook_trigger_id = self.composio.enable_trigger(
-                        trigger_slug=ComposioClient.CALENDAR_EVENT_SYNC, user_id=user_id
+                        trigger_slug=getattr(ComposioClient, "CALENDAR_EVENT_SYNC", "GOOGLECALENDAR_GOOGLE_CALENDAR_EVENT_SYNC_TRIGGER"),
+                        user_id=user_id,
                     )
             else:
                 if conn.webhook_trigger_id:
@@ -307,7 +311,7 @@ class CalendarSyncManager:
 
         self.store.start_heartbeat(connection_id=connection_id, job_id=job_id, lease_seconds=900)
 
-        conn = self.store._connections.get(connection_id)
+        conn = self.store.get_connection_by_id(connection_id)
         if not conn:
             self.store.stop_heartbeat(connection_id)
             self.store.release_lock(connection_id, job_id)
@@ -586,7 +590,7 @@ class CalendarSyncManager:
             "metadata": {
                 "user_id": conn.user_id,
                 "connected_account_id": conn.connection_id,
-                "trigger_slug": ComposioClient.CALENDAR_EVENT_SYNC,
+                "trigger_slug": getattr(ComposioClient, "CALENDAR_EVENT_SYNC", "GOOGLECALENDAR_GOOGLE_CALENDAR_EVENT_SYNC_TRIGGER"),
                 "log_id": f"log_cal_{event_id}",
             },
             "data": {
@@ -710,7 +714,10 @@ class CalendarSyncManager:
             args["pageToken"] = page_token
 
         # Try Composio Google Calendar tools
-        tool_slugs = ["GOOGLECALENDAR_FIND_EVENT", "GOOGLECALENDAR_LIST_EVENTS", "GOOGLE_CALENDAR_LIST_EVENTS"]
+        # Only tools Composio actually publishes. GOOGLECALENDAR_LIST_EVENTS and
+        # GOOGLE_CALENDAR_LIST_EVENTS do not exist and 404ed whenever FIND_EVENT failed.
+        # EVENTS_LIST returns a top-level "items" list, which the parser below reads.
+        tool_slugs = ["GOOGLECALENDAR_FIND_EVENT", "GOOGLECALENDAR_EVENTS_LIST"]
         for slug in tool_slugs:
             try:
                 res = self.composio._composio.tools.execute(

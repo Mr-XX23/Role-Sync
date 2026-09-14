@@ -4,13 +4,8 @@ import { Sparkles, AlertCircle, Loader2 } from 'lucide-react';
 import { useAppDispatch } from '../../store';
 import { checkSession } from '../../store/authSlice';
 
-const getExistingUserRoute = (): string => {
-  const savedRole = localStorage.getItem('rolesync-active-role');
-  if (savedRole === 'sales') return '/salesman';
-  if (savedRole === 'teacher') return '/teacher';
-  if (savedRole === 'student') return '/student';
-  return '/select-role';
-};
+// The Salesman Engine is the only persona; there is no picker to route through.
+const getExistingUserRoute = (): string => '/salesman';
 
 const OAuthCallback: React.FC = () => {
   const [searchParams] = useSearchParams();

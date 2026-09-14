@@ -317,13 +317,15 @@ def test_stock_ledger_append_only(service, tenant_id):
     assert movements[1].delta == -10
     assert movements[1].reason == "DAMAGE"
 
-    # 3. Illegal adjustment causing negative stock
+    # 3. Illegal adjustment causing negative stock (a correction, so made by an admin)
     with pytest.raises(ValueError, match="negative qty_on_hand"):
         service.adjust_stock(
             tenant_id=tenant_id,
             variant_id=var.id,
             location_id=loc.id,
             delta=-150,
+            note="Recount",
+            can_correct=True,
         )
 
 
@@ -511,12 +513,13 @@ def test_set_stock_below_reserved_rejected(service, tenant_id):
     # Reserve 6
     service.reserve(tenant_id, "NOTE-01", 6)
 
+    # Replacing the count is a correction, so these are an admin's, with a note.
     # Setting stock below 6 must be rejected
     with pytest.raises(ValueError, match="less than reserved"):
-        service.set_stock(tenant_id, v.id, loc.id, 4)
+        service.set_stock(tenant_id, v.id, loc.id, 4, note="Recount", can_correct=True)
 
     # Setting stock >= 6 is valid
-    inv = service.set_stock(tenant_id, v.id, loc.id, 8)
+    inv = service.set_stock(tenant_id, v.id, loc.id, 8, note="Recount", can_correct=True)
     assert inv.qty_on_hand == 8
     assert inv.qty_reserved == 6
 
@@ -670,6 +673,7 @@ def test_batch_set_stock_and_batch_availability(service, tenant_id):
             VariantCreate(sku="RTR-200", price=Decimal("129.99")),
         ],
     )
+    variants.sort(key=lambda v: v.sku)  # returned in no particular order, which made this test flaky
     loc1 = service.upsert_location(tenant_id, LocationCreate(name="Hub North", priority=10))
     loc2 = service.upsert_location(tenant_id, LocationCreate(name="Hub South", priority=20))
 

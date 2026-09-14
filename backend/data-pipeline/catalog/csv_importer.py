@@ -334,6 +334,9 @@ class ImportJob(BaseModel):
     csv_content: str = ""
     skip_invalid: bool = False
     auto_create_categories: bool = True
+    # Whether the importing user may replace existing stock counts (workspace owners and
+    # admins). Without it, quantities only fill locations that have no stock yet.
+    can_correct: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -351,6 +354,7 @@ class ImportJobStore:
         csv_content: str,
         skip_invalid: bool = False,
         auto_create_categories: bool = True,
+        can_correct: bool = False,
     ) -> ImportJob:
         job = ImportJob(
             tenant_id=tenant_id,
@@ -358,6 +362,7 @@ class ImportJobStore:
             csv_content=csv_content,
             skip_invalid=skip_invalid,
             auto_create_categories=auto_create_categories,
+            can_correct=can_correct,
         )
         self._jobs[job.job_id] = job
         return job
@@ -434,6 +439,7 @@ class CatalogImportWorker:
         csv_content: str,
         skip_invalid: bool = False,
         auto_create_categories: bool = True,
+        can_correct: bool = False,
     ) -> ImportJob:
         return self.job_store.create_job(
             tenant_id=tenant_id,
@@ -441,6 +447,7 @@ class CatalogImportWorker:
             csv_content=csv_content,
             skip_invalid=skip_invalid,
             auto_create_categories=auto_create_categories,
+            can_correct=can_correct,
         )
 
     def get_job(
@@ -801,6 +808,7 @@ class CatalogImportWorker:
                             reason="RESTOCK",
                             note="CSV initial import",
                             created_by=job.user_id,
+                            can_correct=job.can_correct,
                         )
                         if reorder_at is not None:
                             inv_level.reorder_at = reorder_at

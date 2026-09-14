@@ -70,6 +70,17 @@ class DataPipelineClient:
             raise DataPipelineError("data-pipeline accepted the upload but returned no document id", status=200)
         return document
 
+    async def search_knowledge(self, user_id: UUID, tenant_id: UUID, query: str, *, limit: int) -> list[dict[str, Any]] | None:
+        """Semantic search over the workspace's indexed passages, best first. Each hit has the matched
+        ``text``, the wider ``context`` around it, ``doc_id`` and ``score``. ``None`` on data-pipeline
+        builds without the endpoint; a 503 means search is briefly unavailable."""
+        body = await self._send(
+            "POST", "/api/v1/knowledge-vault/search", user_id, tenant_id=tenant_id, json={"query": query, "limit": limit}, missing_ok=True
+        )
+        if body is None:
+            return None
+        return [hit for hit in body.get("results") or [] if isinstance(hit, dict)]
+
     async def delete_document(self, user_id: UUID, tenant_id: UUID, doc_id: str) -> bool:
         """Remove a vault document; ``False`` if it was already gone."""
         found = await self._send(
@@ -151,8 +162,18 @@ class DataPipelineClient:
         )
         return [item for item in body or [] if isinstance(item, dict)]
 
-    async def set_stock(self, user_id: UUID, tenant_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
-        return await self._send("POST", "/api/v1/catalog/inventory/set-stock", user_id, tenant_id=tenant_id, json=payload)
+    async def record_stock_movement(self, user_id: UUID, tenant_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
+        """One thing that happened to stock (received, sold, shipped, damaged, lost, returned, or a count
+        correction). The ledger is append-only: a mistake is fixed by recording another movement."""
+        return await self._send("POST", "/api/v1/catalog/inventory/movements", user_id, tenant_id=tenant_id, json=payload)
+
+    async def stock_movements(self, user_id: UUID, tenant_id: UUID, params: dict[str, Any]) -> dict[str, Any]:
+        """Stock history, newest first: ``{items, total, limit, offset}``."""
+        return await self._get("/api/v1/catalog/inventory/movements", user_id, tenant_id=tenant_id, params=params)
+
+    async def stock_summary(self, user_id: UUID, tenant_id: UUID, params: dict[str, Any]) -> dict[str, Any]:
+        """Per-location totals of each kind of movement, with current stock: ``{locations, totals}``."""
+        return await self._get("/api/v1/catalog/inventory/movements/summary", user_id, tenant_id=tenant_id, params=params)
 
     async def reserve_stock(
         self, user_id: UUID, tenant_id: UUID, *, sku: str, quantity: int, location_id: str | None = None

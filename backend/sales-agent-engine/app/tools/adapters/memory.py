@@ -29,6 +29,7 @@ from app.platform.workspace_client import DealsClient, WorkspaceDirectory, Works
 from app.tools.registry import ToolDefinition
 from app.tools.types import (
     ToolAccessDenied,
+    ToolBusy,
     ToolCategory,
     ToolFailed,
     ToolInput,
@@ -148,7 +149,7 @@ def memory_tools(
         try:
             record = await store.update(tenant_id=ctx.tenant_id, scope=scope, key=key, mutate=mutate, written_by=ctx.user_id)
         except MemoryBusy as exc:
-            raise ToolFailed(str(exc), retryable=True) from exc
+            raise ToolBusy(str(exc)) from exc
         fact = saved["fact"]
         subject = _subject(args.about, name, key)
         return ToolOutput(
@@ -207,7 +208,7 @@ def memory_tools(
         try:
             await store.update(tenant_id=ctx.tenant_id, scope=scope, key=key, mutate=mutate, written_by=ctx.user_id)
         except MemoryBusy as exc:
-            raise ToolFailed(str(exc), retryable=True) from exc
+            raise ToolBusy(str(exc)) from exc
         if removed.get("fact") is None:
             raise ToolInputError(f"there is no remembered fact {args.fact_id} about {_subject(args.about, name, key)}")
         return ToolOutput(

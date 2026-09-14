@@ -1,11 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { AlertCircle, CheckCircle2, Circle, Eye, EyeOff, KeyRound, LogOut, UserRoundKey } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { clearUpdateState, logoutUser, updatePassword } from '../../store/authSlice';
-import { clearActiveRole } from '../../store/roleSlice';
 
 // The same rules auth-service applies (services/user/PasswordPolicy.java).
 function passwordChecks(password: string) {
@@ -74,19 +73,10 @@ const Changepassword: React.FC = () => {
     void dispatch(updatePassword({ currentPassword, newPassword }));
   };
 
-  const goToApp = () => {
-    let savedRole: string | null = null;
-    try {
-      savedRole = localStorage.getItem('rolesync-active-role');
-    } catch {
-      // storage unavailable: pick the role again
-    }
-    navigate(savedRole === 'sales' ? '/salesman' : '/select-role', { replace: true });
-  };
+  const goToApp = () => navigate('/salesman', { replace: true });
 
   const signOut = () => {
     void dispatch(logoutUser());
-    dispatch(clearActiveRole());
   };
 
   return (
@@ -223,9 +213,18 @@ const Changepassword: React.FC = () => {
           </>
         )}
 
-        <p className="mt-8 text-center font-mono text-[12px] text-muted-foreground/90 select-none">
-          © {new Date().getFullYear()} RoleSync AI.
-        </p>
+        <div className="mt-8 text-center space-y-2 select-none">
+          <div className="flex justify-center gap-4 text-xs">
+            <Link to="/privacy" className="text-muted-foreground hover:text-primary transition-colors">
+              Privacy Policy
+            </Link>
+            <span className="text-border">•</span>
+            <Link to="/terms" className="text-muted-foreground hover:text-primary transition-colors">
+              Terms of Service
+            </Link>
+          </div>
+          <p className="font-mono text-[12px] text-muted-foreground/90">© {new Date().getFullYear()} RoleSync AI.</p>
+        </div>
       </main>
     </div>
   );

@@ -18,6 +18,7 @@ class ComposioClient:
     GDRIVE_CHANGES = "GOOGLEDRIVE_GOOGLE_DRIVE_CHANGES"
     CALENDAR_EVENT_UPDATED = "GOOGLECALENDAR_GOOGLE_CALENDAR_EVENT_UPDATED_TRIGGER"
     CALENDAR_EVENT_CREATED = "GOOGLECALENDAR_GOOGLE_CALENDAR_EVENT_CREATED_TRIGGER"
+    CALENDAR_EVENT_SYNC = "GOOGLECALENDAR_GOOGLE_CALENDAR_EVENT_SYNC_TRIGGER"
     SLACK_NEW_MESSAGE = "SLACK_RECEIVE_MESSAGE"
     SLACK_CHANNEL_MESSAGE = "SLACK_CHANNEL_MESSAGE_RECEIVED"
     SLACK_DIRECT_MESSAGE = "SLACK_DIRECT_MESSAGE_RECEIVED"
@@ -35,16 +36,16 @@ class ComposioClient:
     _cache_lock = threading.Lock()
 
     def __init__(self) -> None:
-        self.api_key = os.environ.get("COMPOSIO_API_KEY", "") or "ak_kQyQGGO6ax5A8_HD23gM"
-        if "esa-" in self.api_key or "HtfN" in self.api_key or not self.api_key:
-            self.api_key = "ak_kQyQGGO6ax5A8_HD23gM"
+        self.api_key = os.environ.get("COMPOSIO_API_KEY", "")
+        if not self.api_key:
+            print("[ComposioClient] COMPOSIO_API_KEY is not set; connectors are disabled.")
 
         self._webhook_secret = os.environ.get("COMPOSIO_WEBHOOK_SECRET", "")
         self._composio = None
         if Composio is not None and self.api_key:
             try:
                 self._composio = Composio(api_key=self.api_key)
-                print(f"[ComposioClient] Initialized Composio v3 SDK with API key: {self.api_key[:6]}...")
+                print("[ComposioClient] Initialized Composio v3 SDK.")
             except Exception as err:
                 print(f"[ComposioClient] Error initializing Composio SDK: {err}")
 

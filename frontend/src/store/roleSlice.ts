@@ -3,31 +3,28 @@ import type { PayloadAction } from '@reduxjs/toolkit';
 
 export type RolePack = 'sales' | 'teacher' | 'student';
 
+/** The Salesman Engine is the only persona that ships today, so it is always active. */
+export const DEFAULT_ROLE: RolePack = 'sales';
+
 interface RoleState {
-  activeRolePack: RolePack | null;
+  activeRolePack: RolePack;
   availableRoles: RolePack[];
 }
 
 const initialState: RoleState = {
-  activeRolePack: (localStorage.getItem('rolesync-active-role') as RolePack) || null,
-  availableRoles: ['sales', 'teacher', 'student'],
+  activeRolePack: DEFAULT_ROLE,
+  availableRoles: [DEFAULT_ROLE],
 };
 
 const roleSlice = createSlice({
   name: 'role',
   initialState,
   reducers: {
-    setActiveRole: (state, action: PayloadAction<RolePack | null>) => {
+    setActiveRole: (state, action: PayloadAction<RolePack>) => {
       state.activeRolePack = action.payload;
-      if (action.payload) {
-        localStorage.setItem('rolesync-active-role', action.payload);
-      } else {
-        localStorage.removeItem('rolesync-active-role');
-      }
     },
     clearActiveRole: (state) => {
-      state.activeRolePack = null;
-      localStorage.removeItem('rolesync-active-role');
+      state.activeRolePack = DEFAULT_ROLE;
     },
   },
 });

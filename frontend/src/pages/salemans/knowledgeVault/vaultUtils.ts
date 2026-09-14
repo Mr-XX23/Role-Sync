@@ -12,6 +12,12 @@ export const ALLOWED_EXTENSIONS = [
   'TSV',
   'YAML',
   'YML',
+  // Images are OCR'd by LlamaParse in the pipeline (ParserCategory.LLAMA_IMAGE).
+  'PNG',
+  'JPG',
+  'JPEG',
+  'WEBP',
+  'GIF',
 ];
 
 export interface RagPreset {
