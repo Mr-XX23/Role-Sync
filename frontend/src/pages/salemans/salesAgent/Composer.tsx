@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import {
   ArrowUp,
   FileText,
@@ -9,10 +9,14 @@ import {
   Paperclip,
   Search,
   Sheet,
+  WandSparkles,
   X,
 } from 'lucide-react';
+import type { Skill } from '../../../api/skillsApi';
+import { matchSkills } from '../skills/skillMeta';
 import type { Attachment } from './attachments';
 import { ATTACHMENT_ACCEPT, MAX_ATTACHMENTS, formatBytes, toAttachment } from './attachments';
+import { SkillMenu } from './SkillMenu';
 
 export type ComposerPhase = 'idle' | 'uploading' | 'indexing' | 'sending';
 
@@ -40,6 +44,9 @@ const QUICK_ACTIONS: { label: string; icon: React.FC<{ className?: string }>; te
   },
 ];
 
+/** Typing "/" and a few words as the whole message searches the skills. */
+const SLASH_COMMAND = /^\/([^\n/]{0,60})$/;
+
 const SUGGESTIONS = [
   'Prep me for my call with Acme: recent news, our past emails with them, and which of our products fit.',
   'Email jane@acme.com a short thank-you for today’s demo and book a 30-minute follow-up with her next Tuesday at 3pm.',
@@ -63,6 +70,11 @@ interface ComposerProps {
   /** The large first-message version shows prompt starters; the docked one is compact. */
   variant: 'hero' | 'docked';
   autoFocus?: boolean;
+  /** Skills switched on for the rep's agent; null while they load, or if they couldn't be. */
+  skills: Skill[] | null;
+  /** The skill picked for the next message, if any. */
+  skill: Skill | null;
+  onSkillChange: (skill: Skill | null) => void;
 }
 
 const documentIcon = (name: string) => (/\.(xlsx|csv|tsv)$/i.test(name) ? Sheet : FileText);
@@ -86,17 +98,36 @@ export const Composer: React.FC<ComposerProps> = ({
   progress,
   variant,
   autoFocus = false,
+  skills,
+  skill,
+  onSkillChange,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const moreRef = useRef<HTMLDivElement>(null);
+  const skillButtonRef = useRef<HTMLButtonElement>(null);
+  const skillMenuRef = useRef<HTMLDivElement>(null);
+  const skillMenuId = useId();
   const [dragging, setDragging] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false); // opened with the Skills button
+  const [skillSearch, setSkillSearch] = useState('');
+  const [slashClosed, setSlashClosed] = useState(false); // Esc closed the menu for the "/…" being typed
+  const [activeSkill, setActiveSkill] = useState(0);
 
   const working = phase !== 'idle';
   const disabled = blocked || working;
-  const canSend = !disabled && (value.trim().length > 0 || attachments.length > 0);
+  const canSend = !disabled && (value.trim().length > 0 || attachments.length > 0 || skill !== null);
   const attachmentsFull = attachments.length >= MAX_ATTACHMENTS;
+
+  const available = skills ?? [];
+  const slash = !disabled && !skillsOpen && !slashClosed && available.length > 0 ? SLASH_COMMAND.exec(value) : null;
+  const skillQuery = skillsOpen ? skillSearch : (slash?.[1] ?? '');
+  const skillMatches = skillsOpen || slash ? matchSkills(available, skillQuery) : [];
+  // Once nothing matches and the rep has typed past a single word, a message starting with "/" is just text.
+  const skillMenuOpen = (skillsOpen && !disabled) || (slash !== null && (skillMatches.length > 0 || !/\s/.test(slash[1])));
+  const active = Math.min(activeSkill, Math.max(skillMatches.length - 1, 0));
+  const activeOptionId = skillMenuOpen && skillMatches.length > 0 ? `${skillMenuId}-${active}` : undefined;
 
   // Grow with the text, up to a comfortable height, then scroll.
   useEffect(() => {
@@ -124,6 +155,62 @@ export const Composer: React.FC<ComposerProps> = ({
       document.removeEventListener('keydown', onKey);
     };
   }, [moreOpen]);
+
+  useEffect(() => {
+    if (!skillsOpen) return;
+    const onDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (!skillMenuRef.current?.contains(target) && !skillButtonRef.current?.contains(target)) setSkillsOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [skillsOpen]);
+
+  // Straight away rather than on the next frame: the search box is about to go, and keys typed in between would be lost.
+  const focusMessage = () => textareaRef.current?.focus();
+
+  const pickSkill = (picked: Skill) => {
+    focusMessage();
+    onSkillChange(picked);
+    if (!skillsOpen) onChange(''); // the "/…" typed to find it isn't part of the message
+    setSkillsOpen(false);
+    setSkillSearch('');
+    setActiveSkill(0);
+  };
+
+  const closeSkillMenu = () => {
+    if (skillsOpen) {
+      focusMessage();
+      setSkillsOpen(false);
+      setSkillSearch('');
+    } else {
+      setSlashClosed(true);
+    }
+    setActiveSkill(0);
+  };
+
+  /** Arrow keys, Enter or Tab, and Esc while the skill menu is open. True when the key was used. */
+  const onSkillMenuKey = (event: React.KeyboardEvent): boolean => {
+    if (!skillMenuOpen) return false;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeSkillMenu();
+      return true;
+    }
+    if (skillMatches.length === 0) return false;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const step = event.key === 'ArrowDown' ? 1 : skillMatches.length - 1;
+      setActiveSkill((active + step) % skillMatches.length);
+      return true;
+    }
+    if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
+      event.preventDefault();
+      pickSkill(skillMatches[active]);
+      return true;
+    }
+    return false;
+  };
 
   const addFiles = (files: FileList | File[]) => {
     const next = [...attachments];
@@ -163,8 +250,15 @@ export const Composer: React.FC<ComposerProps> = ({
     });
   };
 
+  const skillHint = available.length > 0 ? (variant === 'hero' ? ' Type / for skills.' : ' (/ for skills)') : '';
   const placeholder =
-    blocked && blockedReason ? blockedReason : variant === 'hero' ? 'What do you want to know or get done?' : 'Reply or ask for something else…';
+    blocked && blockedReason
+      ? blockedReason
+      : skill
+        ? `Add details for ${skill.name}, or just send`
+        : variant === 'hero'
+          ? `What do you want to know or get done?${skillHint}`
+          : `Reply or ask for something else…${skillHint}`;
 
   const box = (
     <div
@@ -190,6 +284,31 @@ export const Composer: React.FC<ComposerProps> = ({
           <p className="inline-flex items-center gap-2 rounded-full bg-card border border-primary/40 px-4 py-2 text-xs font-semibold text-primary shadow-md">
             <Paperclip className="w-3.5 h-3.5" /> Drop documents or images
           </p>
+        </div>
+      )}
+
+      {/* Picked skill */}
+      {skill && (
+        <div className="px-3 pt-3">
+          <span
+            title={skill.description}
+            className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 py-1 pl-2.5 pr-1 text-xs text-primary"
+          >
+            <WandSparkles className="w-3.5 h-3.5 shrink-0" />
+            <span className="font-semibold truncate">{skill.name}</span>
+            {working ? (
+              <span className="w-1" />
+            ) : (
+              <button
+                type="button"
+                aria-label={`Don’t use ${skill.name}`}
+                onClick={() => onSkillChange(null)}
+                className="w-5 h-5 rounded-full hover:bg-primary/20 flex items-center justify-center transition-colors cursor-pointer shrink-0"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </span>
         </div>
       )}
 
@@ -245,8 +364,19 @@ export const Composer: React.FC<ComposerProps> = ({
         disabled={disabled}
         placeholder={placeholder}
         maxLength={MAX_MESSAGE_CHARS}
-        onChange={(event) => onChange(event.target.value.slice(0, MAX_MESSAGE_CHARS))}
+        aria-controls={activeOptionId && !skillsOpen ? skillMenuId : undefined}
+        aria-activedescendant={skillsOpen ? undefined : activeOptionId}
+        onChange={(event) => {
+          const next = event.target.value.slice(0, MAX_MESSAGE_CHARS);
+          // A fresh "/" (or any other text) brings the menu back after Esc closed it.
+          if (next === '/' || !next.startsWith('/')) setSlashClosed(false);
+          setActiveSkill(0);
+          onChange(next);
+        }}
+        onFocus={() => setSlashClosed(false)}
+        onBlur={() => slash && setSlashClosed(true)}
         onKeyDown={(event) => {
+          if (onSkillMenuKey(event)) return;
           if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
             if (canSend) onSend();
@@ -295,6 +425,29 @@ export const Composer: React.FC<ComposerProps> = ({
           >
             <Paperclip className="w-4 h-4" />
           </button>
+          {skills !== null && (
+            <button
+              ref={skillButtonRef}
+              type="button"
+              title="Pick a skill for this request (or type /)"
+              aria-haspopup="listbox"
+              aria-expanded={skillsOpen}
+              disabled={disabled}
+              onClick={() => {
+                setSkillsOpen((open) => !open);
+                setSkillSearch('');
+                setActiveSkill(0);
+              }}
+              className={`h-9 rounded-full border px-3 inline-flex items-center gap-1.5 text-xs font-semibold transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 shrink-0 ${
+                skillsOpen
+                  ? 'border-primary/40 bg-primary/10 text-primary'
+                  : 'border-border/80 bg-background text-muted-foreground hover:text-foreground hover:border-foreground/30'
+              }`}
+            >
+              <WandSparkles className="w-4 h-4" />
+              Skills
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
@@ -332,6 +485,47 @@ export const Composer: React.FC<ComposerProps> = ({
           </button>
         </div>
       </div>
+
+      {skillMenuOpen && (
+        <div ref={skillMenuRef}>
+          <SkillMenu
+            id={skillMenuId}
+            matches={skillMatches}
+            available={available.length}
+            query={skillQuery}
+            active={active}
+            onActiveChange={setActiveSkill}
+            onPick={pickSkill}
+            placement={variant === 'hero' ? 'below' : 'above'}
+            search={
+              skillsOpen ? (
+                <div className="px-2 pb-1.5">
+                  <label className="relative block">
+                    <span className="sr-only">Search skills</span>
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+                    <input
+                      autoFocus
+                      type="text"
+                      value={skillSearch}
+                      placeholder="Search skills"
+                      aria-controls={activeOptionId ? skillMenuId : undefined}
+                      aria-activedescendant={activeOptionId}
+                      onChange={(event) => {
+                        setSkillSearch(event.target.value);
+                        setActiveSkill(0);
+                      }}
+                      onKeyDown={(event) => {
+                        onSkillMenuKey(event);
+                      }}
+                      className="w-full h-8 rounded-lg border border-border bg-background pl-8 pr-2.5 text-xs text-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/10"
+                    />
+                  </label>
+                </div>
+              ) : undefined
+            }
+          />
+        </div>
+      )}
     </div>
   );
 
