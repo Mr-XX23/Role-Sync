@@ -37,214 +37,261 @@ import { Deals } from './pages/salemans/deals/Deals';
 import { UserManagement } from './pages/salemans/userManagement/UserManagement';
 import { LandingPage } from './pages/marketing/LandingPage';
 import { LegalPage } from './pages/legal/LegalPage';
+import { PageTitleManager } from './components/common/PageTitleManager';
 
 /** Public marketing site: one scrolling page, each route scrolls to its section. */
-const MARKETING_PATHS = ['/', '/home', '/features', '/how-it-works', '/integrations', '/security', '/about', '/contact'];
+const MARKETING_ROUTES = [
+  { path: '/', title: 'RoleSync AI — The AI Operating System for Revenue Teams' },
+  { path: '/home', title: 'RoleSync AI — The AI Operating System for Revenue Teams' },
+  { path: '/features', title: 'Features' },
+  { path: '/how-it-works', title: 'How It Works' },
+  { path: '/integrations', title: 'Integrations' },
+  { path: '/security', title: 'Security' },
+  { path: '/about', title: 'About' },
+  { path: '/contact', title: 'Contact' },
+];
 
 export const router = createBrowserRouter([
-  ...MARKETING_PATHS.map((path) => ({ path, element: <LandingPage /> })),
   {
-    path: '/privacy',
-    element: <LegalPage slug="privacy" />,
-  },
-  {
-    path: '/terms',
-    element: <LegalPage slug="terms" />,
-  },
-  {
-    path: '/signin',
-    element: (
-      <GuestRoute>
-        <Signin />
-      </GuestRoute>
-    ),
-  },
-  {
-    path: '/auth/callback',
-    element: <OAuthCallback />,
-  },
-  {
-    path: '/connectors/callback',
-    element: <ConnectorOAuthCallback />,
-  },
-  {
-    path: '/login',
-    element: <Navigate to="/signin" replace />,
-  },
-  {
-    path: '/register',
-    element: (
-      <GuestRoute>
-        <Register />
-      </GuestRoute>
-    ),
-  },
-  {
-    path: '/verify-email',
-    element: (
-      <RegistrationFlowGuard>
-        <VerifyEmail />
-      </RegistrationFlowGuard>
-    ),
-  },
-  {
-    path: '/verify-phone',
-    element: (
-      <RegistrationFlowGuard>
-        <VerifyPhone />
-      </RegistrationFlowGuard>
-    ),
-  },
-  {
-    path: '/forgot-password',
-    element: <Passwordreset />,
-  },
-  {
-    path: '/change-password',
-    element: (
-      <ProtectedRoute>
-        <Changepassword />
-      </ProtectedRoute>
-    ),
-  },
-  {
-    path: '/onboarding',
-    element: (
-      <ProtectedRoute>
-        <OnboardingWizard />
-      </ProtectedRoute>
-    ),
-  },
-  {
-    path: '/auth/onboarding',
-    element: <Navigate to="/onboarding" replace />,
-  },
-  // The Salesman Engine is the only persona, so the old picker URLs go straight to it.
-  {
-    path: '/workspace',
-    element: <Navigate to="/salesman" replace />,
-  },
-  {
-    path: '/select-role',
-    element: <Navigate to="/salesman" replace />,
-  },
-  {
-    path: '/salesman',
-    element: (
-      <ProtectedRoute>
-        <OnboardingGuard>
-          <DashboardLayout />
-        </OnboardingGuard>
-      </ProtectedRoute>
-    ),
+    element: <PageTitleManager />,
     children: [
+      ...MARKETING_ROUTES.map(({ path, title }) => ({
+        path,
+        element: <LandingPage />,
+        handle: { title },
+      })),
       {
-        path: '',
-        element: <Navigate to="knowledge-vault" replace />,
+        path: '/privacy',
+        element: <LegalPage slug="privacy" />,
+        handle: { title: 'Privacy Policy' },
       },
       {
-        path: 'products',
-        element: <ProductManagement />,
+        path: '/terms',
+        element: <LegalPage slug="terms" />,
+        handle: { title: 'Terms of Service' },
       },
       {
-        path: 'sales-agent',
-        element: <SalesAgent />,
+        path: '/signin',
+        element: (
+          <GuestRoute>
+            <Signin />
+          </GuestRoute>
+        ),
+        handle: { title: 'Sign In' },
       },
       {
-        path: 'skills',
-        element: <Skills />,
+        path: '/auth/callback',
+        element: <OAuthCallback />,
+        handle: { title: 'Authenticating' },
       },
       {
-        path: 'deals',
-        element: <Deals />,
+        path: '/connectors/callback',
+        element: <ConnectorOAuthCallback />,
+        handle: { title: 'Connecting Integration' },
       },
       {
-        path: 'knowledge-vault',
-        element: <KnowledgeVault />,
+        path: '/login',
+        element: <Navigate to="/signin" replace />,
       },
       {
-        path: 'external-connector',
-        element: <ExternalConnector />,
-      },
-      // Hidden for now: Agent Manager and Workspace routes.
-      // {
-      //   path: 'ai-tasks',
-      //   element: <AiTasks />,
-      // },
-      // {
-      //   path: 'workspace',
-      //   element: <Workspace />,
-      // },
-      {
-        path: 'users',
-        element: <UserManagement />,
+        path: '/register',
+        element: (
+          <GuestRoute>
+            <Register />
+          </GuestRoute>
+        ),
+        handle: { title: 'Create Account' },
       },
       {
-        path: 'profile',
-        element: <Profile />,
+        path: '/verify-email',
+        element: (
+          <RegistrationFlowGuard>
+            <VerifyEmail />
+          </RegistrationFlowGuard>
+        ),
+        handle: { title: 'Verify Email' },
       },
       {
-        path: 'settings',
-        element: <Settings />,
+        path: '/verify-phone',
+        element: (
+          <RegistrationFlowGuard>
+            <VerifyPhone />
+          </RegistrationFlowGuard>
+        ),
+        handle: { title: 'Verify Phone' },
       },
       {
-        path: 'support',
-        element: <Support />,
-      },
-    ],
-  },
-  // The Super Admin Console: platform super admins only (every console API checks that on the server too).
-  {
-    path: '/admin',
-    element: (
-      <ProtectedRoute>
-        <SuperAdminRoute>
-          <AdminLayout />
-        </SuperAdminRoute>
-      </ProtectedRoute>
-    ),
-    children: [
-      {
-        path: '',
-        element: <Navigate to="overview" replace />,
+        path: '/forgot-password',
+        element: <Passwordreset />,
+        handle: { title: 'Reset Password' },
       },
       {
-        path: 'overview',
-        element: <AdminOverview />,
+        path: '/change-password',
+        element: (
+          <ProtectedRoute>
+            <Changepassword />
+          </ProtectedRoute>
+        ),
+        handle: { title: 'Change Password' },
       },
       {
-        path: 'users',
-        element: <AdminUsers />,
+        path: '/onboarding',
+        element: (
+          <ProtectedRoute>
+            <OnboardingWizard />
+          </ProtectedRoute>
+        ),
+        handle: { title: 'Onboarding Wizard' },
       },
       {
-        path: 'workspaces',
-        element: <AdminWorkspaces />,
+        path: '/auth/onboarding',
+        element: <Navigate to="/onboarding" replace />,
+      },
+      // The Salesman Engine is the only persona, so the old picker URLs go straight to it.
+      {
+        path: '/workspace',
+        element: <Navigate to="/salesman" replace />,
       },
       {
-        path: 'support',
-        element: <AdminSupportTickets />,
+        path: '/select-role',
+        element: <Navigate to="/salesman" replace />,
       },
       {
-        path: 'agents',
-        element: <AdminAgents />,
+        path: '/salesman',
+        element: (
+          <ProtectedRoute>
+            <OnboardingGuard>
+              <DashboardLayout />
+            </OnboardingGuard>
+          </ProtectedRoute>
+        ),
+        children: [
+          {
+            path: '',
+            element: <Navigate to="knowledge-vault" replace />,
+          },
+          {
+            path: 'products',
+            element: <ProductManagement />,
+            handle: { title: 'Product Management' },
+          },
+          {
+            path: 'sales-agent',
+            element: <SalesAgent />,
+            handle: { title: 'Sales Agent' },
+          },
+          {
+            path: 'skills',
+            element: <Skills />,
+            handle: { title: 'Agent Skills' },
+          },
+          {
+            path: 'deals',
+            element: <Deals />,
+            handle: { title: 'Deals' },
+          },
+          {
+            path: 'knowledge-vault',
+            element: <KnowledgeVault />,
+            handle: { title: 'Knowledge Vault' },
+          },
+          {
+            path: 'external-connector',
+            element: <ExternalConnector />,
+            handle: { title: 'Data Connectors' },
+          },
+          // Hidden for now: Agent Manager and Workspace routes.
+          // {
+          //   path: 'ai-tasks',
+          //   element: <AiTasks />,
+          // },
+          // {
+          //   path: 'workspace',
+          //   element: <Workspace />,
+          // },
+          {
+            path: 'users',
+            element: <UserManagement />,
+            handle: { title: 'User Management' },
+          },
+          {
+            path: 'profile',
+            element: <Profile />,
+            handle: { title: 'Profile' },
+          },
+          {
+            path: 'settings',
+            element: <Settings />,
+            handle: { title: 'Settings' },
+          },
+          {
+            path: 'support',
+            element: <Support />,
+            handle: { title: 'Support' },
+          },
+        ],
       },
+      // The Super Admin Console: platform super admins only (every console API checks that on the server too).
       {
-        path: 'models',
-        element: <AdminModels />,
+        path: '/admin',
+        element: (
+          <ProtectedRoute>
+            <SuperAdminRoute>
+              <AdminLayout />
+            </SuperAdminRoute>
+          </ProtectedRoute>
+        ),
+        children: [
+          {
+            path: '',
+            element: <Navigate to="overview" replace />,
+          },
+          {
+            path: 'overview',
+            element: <AdminOverview />,
+            handle: { title: 'Overview | Admin' },
+          },
+          {
+            path: 'users',
+            element: <AdminUsers />,
+            handle: { title: 'Users | Admin' },
+          },
+          {
+            path: 'workspaces',
+            element: <AdminWorkspaces />,
+            handle: { title: 'Workspaces | Admin' },
+          },
+          {
+            path: 'support',
+            element: <AdminSupportTickets />,
+            handle: { title: 'Support Tickets | Admin' },
+          },
+          {
+            path: 'agents',
+            element: <AdminAgents />,
+            handle: { title: 'Agent Manager | Admin' },
+          },
+          {
+            path: 'models',
+            element: <AdminModels />,
+            handle: { title: 'AI Models | Admin' },
+          },
+          {
+            path: 'prompts',
+            element: <AdminPrompts />,
+            handle: { title: 'Prompts | Admin' },
+          },
+          // Usage, Plans and Audit Log are in the nav but have no page yet.
+          {
+            path: '*',
+            element: <Navigate to="/admin/overview" replace />,
+          },
+        ],
       },
-      {
-        path: 'prompts',
-        element: <AdminPrompts />,
-      },
-      // Usage, Plans and Audit Log are in the nav but have no page yet.
       {
         path: '*',
-        element: <Navigate to="/admin/overview" replace />,
+        element: <Navigate to="/salesman" replace />,
       },
     ],
-  },
-  {
-    path: '*',
-    element: <Navigate to="/salesman" replace />,
   },
 ]);

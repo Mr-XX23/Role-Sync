@@ -21,13 +21,8 @@ export const LegalPage: React.FC<{ slug: LegalSlug }> = ({ slug }) => {
   const [active, setActive] = useState(doc.sections[0]?.id ?? '');
 
   useEffect(() => {
-    const previous = document.title;
-    document.title = `${doc.title} — ${BRAND.name}`;
     window.scrollTo({ top: 0 });
-    return () => {
-      document.title = previous;
-    };
-  }, [doc.title]);
+  }, [slug]);
 
   // Highlight the section nearest the top of the viewport in the side index.
   useEffect(() => {

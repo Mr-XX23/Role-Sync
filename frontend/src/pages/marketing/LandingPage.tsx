@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import './marketing.css';
-import { BRAND, ROUTE_TO_SECTION } from './marketingData';
+import { ROUTE_TO_SECTION } from './marketingData';
 import { MarketingNav } from './sections/MarketingNav';
 import { Hero } from './sections/Hero';
 import { StatsBar } from './sections/StatsBar';
@@ -22,14 +22,6 @@ export const LandingPage: React.FC = () => {
   const { pathname } = useLocation();
   // First navigation (a deep link or a hard refresh) jumps straight to the section; later ones animate.
   const hasScrolledOnce = useRef(false);
-
-  useEffect(() => {
-    const previous = document.title;
-    document.title = `${BRAND.name} — ${BRAND.tagline}`;
-    return () => {
-      document.title = previous;
-    };
-  }, []);
 
   useEffect(() => {
     const id = ROUTE_TO_SECTION[pathname] ?? 'top';
