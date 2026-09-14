@@ -1,8 +1,5 @@
 package com.role_sync.workspace.services;
 
-import com.role_sync.workspace.dto.AddMemberRequest;
-import com.role_sync.workspace.dto.UpdateMemberRoleRequest;
-import com.role_sync.workspace.dto.WorkspaceMembershipResponse;
 import com.role_sync.workspace.dto.WorkspaceRequest;
 import com.role_sync.workspace.dto.WorkspaceResponse;
 import reactor.core.publisher.Flux;
@@ -19,7 +16,5 @@ public interface WorkspaceService {
      * OWNER) if they have none. Idempotent: concurrent calls for one user create one workspace.
      */
     Mono<WorkspaceResponse> ensureDefaultWorkspace(UUID authUserId);
-    Mono<UUID> addMemberToWorkspace(UUID workspaceId, UUID callerAuthUserId, AddMemberRequest request);
-    Mono<WorkspaceMembershipResponse> updateMemberRole(UUID workspaceId, UUID membershipId, UUID callerAuthUserId, UpdateMemberRoleRequest request);
     Mono<WorkspaceResponse> updateWorkspace(UUID workspaceId, UUID authUserId, WorkspaceRequest request);
 }

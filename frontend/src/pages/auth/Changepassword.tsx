@@ -1,24 +1,42 @@
-import React, { useState, useEffect } from 'react';
-import { Eye, EyeOff, CheckCircle2, Circle, ArrowLeft, AlertCircle, Shield, UserRoundKey } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { AlertCircle, CheckCircle2, Circle, Eye, EyeOff, KeyRound, LogOut, UserRoundKey } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
 import { useAppDispatch, useAppSelector } from '../../store';
-import { updatePassword, clearUpdateState } from '../../store/authSlice';
+import { clearUpdateState, logoutUser, updatePassword } from '../../store/authSlice';
+
+// The same rules auth-service applies (services/user/PasswordPolicy.java).
+function passwordChecks(password: string) {
+  return {
+    length: password.length >= 12 && password.length <= 128,
+    mixedCase: /\p{Ll}/u.test(password) && /\p{Lu}/u.test(password),
+    numberAndSymbol: /\p{Nd}/u.test(password) && /[^\p{L}\p{Nd}\s]/u.test(password),
+    noEdgeSpaces: password === password.trim(),
+  };
+}
+
+const Requirement: React.FC<{ met: boolean; children: React.ReactNode }> = ({ met, children }) => (
+  <li className={`flex items-center gap-2 ${met ? 'text-primary font-medium' : 'text-muted-foreground'}`}>
+    {met ? <CheckCircle2 className="w-4 h-4 text-primary" /> : <Circle className="w-4 h-4" />}
+    <span>{children}</span>
+  </li>
+);
 
 const Changepassword: React.FC = () => {
   const navigate = useNavigate();
+  const dispatch = useAppDispatch();
+  const { user, isUpdateLoading, updateSuccess, updateError } = useAppSelector((state) => state.auth);
+  // Remember why the page opened: the flag clears as soon as the new password is saved.
+  const [forced] = useState(() => Boolean(user?.mustChangePassword));
+
+  const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
+  const [showCurrent, setShowCurrent] = useState(false);
+  const [showNew, setShowNew] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
-  const dispatch = useAppDispatch();
-  const { isUpdateLoading, updateSuccess, updateError } = useAppSelector(
-    (state) => state.auth
-  );
-
-  // Clear state on mount and unmount
   useEffect(() => {
     dispatch(clearUpdateState());
     return () => {
@@ -26,303 +44,186 @@ const Changepassword: React.FC = () => {
     };
   }, [dispatch]);
 
-  // Subtle mouse tracking for background glow
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      const container = document.getElementById('interactive-bg');
-      if (container) {
-        const x = (e.clientX / window.innerWidth) * 100;
-        const y = (e.clientY / window.innerHeight) * 100;
-        container.style.backgroundImage = `
-          radial-gradient(at ${x}% ${y}%, rgba(222, 187, 174, 0.12) 0px, transparent 50%),
-          radial-gradient(at 0% 0%, rgba(222, 187, 174, 0.15) 0px, transparent 50%),
-          radial-gradient(at 100% 100%, rgba(113, 91, 58, 0.08) 0px, transparent 50%)
-        `;
-      }
-    };
+  const checks = passwordChecks(newPassword);
+  const allMet = checks.length && checks.mixedCase && checks.numberAndSymbol && checks.noEdgeSpaces;
+  const error = localError || updateError;
 
-    window.addEventListener('mousemove', handleMouseMove);
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-    };
-  }, []);
-
-  // Compute password validation rules dynamically on render
-  const hasLength = newPassword.length >= 12;
-  const hasCase = /[A-Z]/.test(newPassword) && /[a-z]/.test(newPassword);
-  const hasSymbols = /[0-9]/.test(newPassword) && /[^A-Za-z0-9]/.test(newPassword);
-
-  // Strength score from 0 to 4
-  let strengthScore = 0;
-  if (newPassword.length > 0) strengthScore += 1;
-  if (hasLength) strengthScore += 1;
-  if (hasCase) strengthScore += 1;
-  if (hasSymbols) strengthScore += 1;
-
-  // Get labels and colors for strength levels
-  const getStrengthMeta = () => {
-    switch (strengthScore) {
-      case 1:
-        return { label: 'Weak', colorClass: 'bg-destructive' };
-      case 2:
-        return { label: 'Fair', colorClass: 'bg-[#4b342a]/70 dark:bg-[#ffe0c2]/60' };
-      case 3:
-        return { label: 'Good', colorClass: 'bg-[#1d4ed8]' };
-      case 4:
-        return { label: 'Strong', colorClass: 'bg-[#644a40] dark:bg-[#ffe0c2]' };
-      default:
-        return { label: 'Weak', colorClass: 'bg-muted' };
-    }
-  };
-
-  const { label: strengthLabel, colorClass: strengthColorClass } = getStrengthMeta();
-
-  const handleSubmit = (e: React.SyntheticEvent) => {
-    e.preventDefault();
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
     setLocalError(null);
-
-    // Validate strength requirements
-    if (strengthScore < 4) {
-      setLocalError('Please satisfy all password strength requirements.');
+    dispatch(clearUpdateState());
+    if (!currentPassword) {
+      setLocalError(forced ? 'Enter the temporary password from your invitation email.' : 'Enter your current password.');
       return;
     }
-
+    if (!allMet) {
+      setLocalError(
+        checks.noEdgeSpaces ? 'Your new password doesn’t meet all the requirements yet.' : 'Your new password can’t start or end with a space.'
+      );
+      return;
+    }
     if (newPassword !== confirmPassword) {
-      setLocalError('Passwords do not match.');
+      setLocalError('The new passwords don’t match.');
       return;
     }
-
-    dispatch(updatePassword(newPassword));
+    if (newPassword === currentPassword) {
+      setLocalError('Choose a new password that’s different from your current one.');
+      return;
+    }
+    void dispatch(updatePassword({ currentPassword, newPassword }));
   };
 
-  const handleBackToSignIn = () => {
-    dispatch(clearUpdateState());
-    navigate('/signin');
+  const goToApp = () => navigate('/salesman', { replace: true });
+
+  const signOut = () => {
+    void dispatch(logoutUser());
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col justify-center items-center py-8 px-4 sm:px-6 relative overflow-hidden">
-      {/* Atmospheric Background Decoration */}
-      <div className="fixed inset-0 bg-pattern pointer-events-none"></div>
-      <div id="interactive-bg" className="fixed inset-0 pointer-events-none transition-all duration-300 bg-cover bg-no-repeat" style={{
-        backgroundImage: `
-          radial-gradient(at 0% 0%, rgba(222, 187, 174, 0.15) 0px, transparent 50%),
-          radial-gradient(at 100% 100%, rgba(113, 91, 58, 0.1) 0px, transparent 50%)
-        `
-      }}></div>
-      <div className="fixed -top-40 -right-40 w-80 h-80 bg-primary-fixed opacity-20 blur-[100px] rounded-full pointer-events-none"></div>
-      <div className="fixed -bottom-40 -left-40 w-80 h-80 bg-secondary-fixed opacity-20 blur-[100px] rounded-full pointer-events-none"></div>
-
-      <main className="relative z-10 w-full max-w-[480px] transition-all duration-700 ease-out">
+    <div className="min-h-screen bg-background text-foreground flex flex-col justify-center items-center py-8 px-4 sm:px-6">
+      <main className="w-full max-w-md">
         {updateSuccess ? (
-          <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
-            {/* Confirmation Card */}
-            <div className="bg-card border border-border/80 rounded-xl p-8 md:p-12 shadow-[0_4px_24px_-2px_rgba(0,0,0,0.04),0_2px_8px_-1px_rgba(0,0,0,0.02)] success-glow relative overflow-hidden group flex flex-col items-center text-center w-full">
-              {/* Subtle Decorative Element */}
-              <div className="absolute -top-12 -right-12 w-32 h-32 bg-primary-fixed/20 dark:bg-primary-fixed/10 rounded-full blur-3xl group-hover:bg-primary-fixed/30 dark:group-hover:bg-primary-fixed/20 transition-colors duration-500 pointer-events-none"></div>
-
-              {/* Success Icon Indicator */}
-              <div className="w-20 h-20 bg-primary-fixed/30 dark:bg-[#fcddbf]/20 rounded-full flex items-center justify-center mb-8 transition-transform duration-500 hover:scale-105 select-none">
-                <div className="w-14 h-14 bg-primary rounded-full flex items-center justify-center text-primary-foreground shadow-sm">
-                  <CheckCircle2 className="w-8 h-8" strokeWidth={1.5} />
-                </div>
-              </div>
-
-              {/* Content */}
-              <h2 className="font-serif text-[30px] leading-[38px] text-foreground mb-4 select-none">
-                Password Updated
-              </h2>
-              <p className="font-sans text-[16px] leading-relaxed text-muted-foreground mb-8 max-w-[280px]">
-                Your password has been successfully reset. You can now use your new password to sign in to your account.
+          <div className="bg-card rounded-lg border border-border p-6 md:p-8 shadow-sm text-center space-y-4">
+            <div className="mx-auto w-14 h-14 rounded-full bg-primary/15 text-primary flex items-center justify-center">
+              <CheckCircle2 className="w-8 h-8" strokeWidth={1.5} />
+            </div>
+            <div className="space-y-1.5">
+              <h2 className="font-serif text-2xl font-bold text-foreground">Password updated</h2>
+              <p className="text-sm text-muted-foreground">
+                {forced
+                  ? 'You’re all set. Use your new password the next time you sign in.'
+                  : 'Use your new password the next time you sign in. Any other devices you were signed in on have been signed out.'}
               </p>
-
-              {/* Primary Action */}
-              <Button
-                variant="primary"
-                className="w-full rounded-[12px] py-4 shadow-sm"
-                onClick={handleBackToSignIn}
-              >
-                Back to Sign In
-              </Button>
-
-              {/* Security Note */}
-              <div className="mt-8 flex items-center gap-2 text-muted-foreground/60 select-none">
-                <Shield className="w-4 h-4" />
-                <span className="font-mono text-[10px] tracking-wider uppercase">Secure Session Verified</span>
-              </div>
             </div>
-
-            {/* Footer Alternative (Subtle Links) */}
-            <div className="mt-8 flex justify-center gap-4 text-xs select-none">
-              <a href="#" className="text-muted-foreground hover:text-primary transition-colors cursor-pointer" onClick={(e) => e.preventDefault()}>Help Center</a>
-              <span className="text-border">•</span>
-              <a href="#" className="text-muted-foreground hover:text-primary transition-colors cursor-pointer" onClick={(e) => e.preventDefault()}>Terms of Service</a>
-            </div>
+            <Button onClick={goToApp}>{forced ? 'Continue' : 'Back to the app'}</Button>
           </div>
         ) : (
-          <div className="animate-in fade-in duration-500">
-            {/* Header */}
-            <div className="flex flex-col items-center mb-4 md:mb-6 lg:mb-8 text-center animate-in slide-in-from-top-2 duration-500">
+          <>
+            <div className="flex flex-col items-center mb-6 text-center">
+              <div className="w-12 h-12 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mb-3">
+                <KeyRound className="w-6 h-6" />
+              </div>
               <h2 className="text-[28px] leading-tight font-bold mb-2 font-serif text-foreground">
-                Set New Password
+                {forced ? 'Choose your password' : 'Change password'}
               </h2>
-              <p className="text-muted-foreground text-sm max-w-[300px]">
-                Ensure your account stays secure with a strong password.
+              <p className="text-muted-foreground text-sm max-w-sm">
+                {forced
+                  ? 'Your workspace admin set up your account with a temporary password. Choose your own to continue.'
+                  : 'Use a strong password that you don’t use for anything else.'}
               </p>
+              {user?.email && <p className="text-xs font-mono text-muted-foreground mt-2">{user.email}</p>}
             </div>
 
-            {/* Form Card */}
-            <div className="bg-card rounded-[12px] border border-border p-4 md:p-6 lg:p-8 shadow-[0_4px_6px_-1px_rgba(0,0,0,0.05),0_2px_4px_-2px_rgba(0,0,0,0.05),0_20px_25px_-5px_rgba(0,0,0,0.02)]">
-              {/* Error Banner */}
-              {(updateError || localError) && (
-                <div className="bg-destructive/10 border border-destructive/20 text-destructive text-xs py-2.5 px-3 rounded-lg mb-4 flex items-start gap-2 animate-in fade-in slide-in-from-top-1 duration-200">
+            <div className="bg-card rounded-lg border border-border p-4 md:p-6 lg:p-8 shadow-sm">
+              {error && (
+                <div
+                  role="alert"
+                  className="bg-destructive/10 border border-destructive/20 text-destructive text-xs py-2.5 px-3 rounded-lg mb-4 flex items-start gap-2"
+                >
                   <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                  <div className="grow text-left">
-                    <p className="font-semibold">Unable to set password</p>
-                    <p className="opacity-90">{localError || updateError}</p>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setLocalError(null);
-                      dispatch(clearUpdateState());
-                    }}
-                    className="text-destructive hover:opacity-80 font-bold ml-1 cursor-pointer select-none focus:outline-none"
-                    aria-label="Clear error banner"
-                  >
-                    &times;
-                  </button>
+                  <p className="grow">{error}</p>
                 </div>
               )}
 
-              <form className="space-y-4 text-left" onSubmit={handleSubmit}>
-                {/* New Password */}
+              <form className="space-y-4" onSubmit={handleSubmit} noValidate>
                 <Input
-                  label="NEW PASSWORD"
-                  id="new-password"
-                  type={showPassword ? 'text' : 'password'}
-                  autoComplete="new-password"
-                  placeholder="••••••••••••"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  leftElement={<UserRoundKey className="w-[16px] h-[16px]" />}
-                  required
+                  label={forced ? 'Temporary password' : 'Current password'}
+                  id="current-password"
+                  type={showCurrent ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  value={currentPassword}
+                  onChange={(event) => setCurrentPassword(event.target.value)}
+                  leftElement={<UserRoundKey className="w-4 h-4" />}
+                  helperText={forced ? 'The one from your invitation email.' : undefined}
                   rightElementInside={
                     <button
                       type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer focus:outline-none flex items-center justify-center"
-                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      onClick={() => setShowCurrent((value) => !value)}
+                      className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer flex items-center"
+                      aria-label={showCurrent ? 'Hide password' : 'Show password'}
                     >
-                      {showPassword ? (
-                        <EyeOff className="w-[16px] h-[16px]" />
-                      ) : (
-                        <Eye className="w-[16px] h-[16px]" />
-                      )}
+                      {showCurrent ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   }
                 />
 
-                {/* Strength Meter */}
-                <div className="space-y-1.5 py-1">
-                  <div className="flex justify-between items-center">
-                    <span className="text-[10px] font-mono font-medium tracking-wider text-muted-foreground">PASSWORD STRENGTH</span>
-                    <span className={`text-[10px] font-mono font-semibold uppercase ${strengthScore > 0 ? (strengthScore === 1 ? 'text-destructive' : strengthScore === 2 ? 'text-foreground/75' : strengthScore === 3 ? 'text-[#1d4ed8]' : 'text-primary') : 'text-muted-foreground'
-                      }`}>
-                      {newPassword.length > 0 ? strengthLabel : 'Empty'}
-                    </span>
-                  </div>
-                  <div className="flex gap-1 h-1.5 w-full">
-                    {[0, 1, 2, 3].map((index) => (
-                      <div
-                        key={index}
-                        className={`h-full flex-1 rounded-full transition-all duration-300 ${index < strengthScore ? strengthColorClass : 'bg-muted'
-                          }`}
-                      ></div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Requirements */}
-                <div className="bg-muted/30 dark:bg-muted/10 rounded-lg p-3 space-y-2 border border-border/40">
-                  <ul className="space-y-2 text-xs">
-                    <li className={`flex items-center gap-2 transition-colors duration-300 ${hasLength ? 'text-primary font-medium' : 'text-muted-foreground'
-                      }`}>
-                      {hasLength ? (
-                        <CheckCircle2 className="w-[16px] h-[16px] text-primary fill-primary/10" />
-                      ) : (
-                        <Circle className="w-[16px] h-[16px] text-muted-foreground" />
-                      )}
-                      <span>At least 12 characters</span>
-                    </li>
-                    <li className={`flex items-center gap-2 transition-colors duration-300 ${hasCase ? 'text-primary font-medium' : 'text-muted-foreground'
-                      }`}>
-                      {hasCase ? (
-                        <CheckCircle2 className="w-[16px] h-[16px] text-primary fill-primary/10" />
-                      ) : (
-                        <Circle className="w-[16px] h-[16px] text-muted-foreground" />
-                      )}
-                      <span>Mixed case letters (Aa)</span>
-                    </li>
-                    <li className={`flex items-center gap-2 transition-colors duration-300 ${hasSymbols ? 'text-primary font-medium' : 'text-muted-foreground'
-                      }`}>
-                      {hasSymbols ? (
-                        <CheckCircle2 className="w-[16px] h-[16px] text-primary fill-primary/10" />
-                      ) : (
-                        <Circle className="w-[16px] h-[16px] text-muted-foreground" />
-                      )}
-                      <span>Numbers and symbols</span>
-                    </li>
-                  </ul>
-                </div>
-
-                {/* Confirm Password */}
                 <Input
-                  label="CONFIRM NEW PASSWORD"
-                  id="confirm-password"
-                  type="password"
+                  label="New password"
+                  id="new-password"
+                  type={showNew ? 'text' : 'password'}
                   autoComplete="new-password"
-                  placeholder="••••••••••••"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  leftElement={<UserRoundKey className="w-[16px] h-[16px]" />}
-                  required
+                  value={newPassword}
+                  onChange={(event) => setNewPassword(event.target.value)}
+                  leftElement={<UserRoundKey className="w-4 h-4" />}
+                  rightElementInside={
+                    <button
+                      type="button"
+                      onClick={() => setShowNew((value) => !value)}
+                      className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer flex items-center"
+                      aria-label={showNew ? 'Hide password' : 'Show password'}
+                    >
+                      {showNew ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  }
                 />
 
-                {/* Submit button */}
-                <Button
-                  type="submit"
-                  isLoading={isUpdateLoading}
-                  loadingText="Updating..."
-                  icon={<CheckCircle2 className="w-[18px] h-[18px]" />}
-                  className="mt-4"
-                >
-                  Update Password
+                <ul className="bg-muted/30 rounded-lg p-3 space-y-1.5 border border-border/40 text-xs" aria-label="Password requirements">
+                  <Requirement met={checks.length}>At least 12 characters</Requirement>
+                  <Requirement met={checks.mixedCase}>Upper and lower case letters</Requirement>
+                  <Requirement met={checks.numberAndSymbol}>A number and a symbol</Requirement>
+                </ul>
+
+                <Input
+                  label="Confirm new password"
+                  id="confirm-password"
+                  type={showNew ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  leftElement={<UserRoundKey className="w-4 h-4" />}
+                  error={confirmPassword && confirmPassword !== newPassword ? 'The passwords don’t match.' : undefined}
+                />
+
+                <Button type="submit" isLoading={isUpdateLoading} loadingText="Saving…" className="mt-2">
+                  {forced ? 'Save password and continue' : 'Update password'}
                 </Button>
               </form>
 
-              {/* Navigation Back */}
-              <div className="mt-6 pt-6 border-t border-border text-center">
-                <a
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-primary transition-colors duration-200 group"
-                  href="#"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    handleBackToSignIn();
-                  }}
-                >
-                  <ArrowLeft className="w-[16px] h-[16px] group-hover:-translate-x-0.5 transition-transform" />
-                  Back to Sign In
-                </a>
+              <div className="mt-6 pt-5 border-t border-border text-center">
+                {forced ? (
+                  <button
+                    type="button"
+                    onClick={signOut}
+                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-primary transition-colors cursor-pointer"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    Sign out
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={goToApp}
+                    className="text-xs font-semibold text-muted-foreground hover:text-primary transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                )}
               </div>
             </div>
-          </div>
+          </>
         )}
 
-        {/* Footer info */}
-        <div className="mt-8 text-center space-y-3 select-none">
-          <p className="font-mono text-[12px] text-muted-foreground/90">
-            © {new Date().getFullYear()} RoleSync AI.
-          </p>
+        <div className="mt-8 text-center space-y-2 select-none">
+          <div className="flex justify-center gap-4 text-xs">
+            <Link to="/privacy" className="text-muted-foreground hover:text-primary transition-colors">
+              Privacy Policy
+            </Link>
+            <span className="text-border">•</span>
+            <Link to="/terms" className="text-muted-foreground hover:text-primary transition-colors">
+              Terms of Service
+            </Link>
+          </div>
+          <p className="font-mono text-[12px] text-muted-foreground/90">© {new Date().getFullYear()} RoleSync AI.</p>
         </div>
       </main>
     </div>

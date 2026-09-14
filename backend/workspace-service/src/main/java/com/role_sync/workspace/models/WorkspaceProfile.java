@@ -107,6 +107,13 @@ public class WorkspaceProfile {
     @Column(name = "update_window_start")
     private LocalDateTime updateWindowStart;
 
+    /**
+     * The account was created by a workspace admin rather than by the person signing up. Such a
+     * user only works in workspaces they are added to: none is created for them on sign-in.
+     */
+    @Column(name = "managed_account")
+    private Boolean managedAccount;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

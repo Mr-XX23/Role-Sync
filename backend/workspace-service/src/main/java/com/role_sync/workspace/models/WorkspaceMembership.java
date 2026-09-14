@@ -49,6 +49,17 @@ public class WorkspaceMembership {
     @Builder.Default
     private Boolean isActive = true;
 
+    /** The admin who added this member through User Management (null for owners and older rows). */
+    @Column(name = "invited_by_profile_id")
+    private UUID invitedByProfileId;
+
+    /**
+     * Whether this workspace issued the member's sign-in details (it created the account, or the
+     * account was still waiting for its first sign-in). Only then may its admins resend them.
+     */
+    @Column(name = "account_created")
+    private Boolean accountCreated;
+
     @PrePersist
     protected void onCreate() {
         joinedAt = LocalDateTime.now();

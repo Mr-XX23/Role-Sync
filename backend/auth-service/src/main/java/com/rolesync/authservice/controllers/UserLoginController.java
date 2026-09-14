@@ -2,8 +2,10 @@ package com.rolesync.authservice.controllers;
 
 import com.rolesync.authservice.annotations.RateLimited;
 import com.rolesync.authservice.dto.CookieUtil;
+import com.rolesync.authservice.dto.loginregistration.ChangePasswordRequest;
 import com.rolesync.authservice.dto.loginregistration.LoginRequest;
 import com.rolesync.authservice.dto.loginregistration.LoginResponse;
+import com.rolesync.authservice.services.userlogin.ChangePassword;
 import com.rolesync.authservice.services.userlogin.Logout;
 import com.rolesync.authservice.services.userlogin.RefreshToken;
 import com.rolesync.authservice.services.userlogin.UserLogin;
@@ -29,6 +31,7 @@ public class UserLoginController {
     private final RefreshToken refreshTokenService;
     private final Logout logoutService;
     private final VerifyUser verifyUserService;
+    private final ChangePassword changePasswordService;
 
     /**
      * Login a user with username and password.
@@ -111,6 +114,31 @@ public class UserLoginController {
 
         Map<String, Object> responseBody = Map.of(
                 "message", res,
+                "success", true,
+                "timestamp", LocalDateTime.now().toString());
+
+        return ResponseEntity.ok(responseBody);
+    }
+
+    /**
+     * Change the signed-in user's password (also how someone replaces the temporary password a
+     * workspace admin emailed them). Other sessions are signed out; this one gets new cookies.
+     *
+     * @param request HttpServletRequest, response HttpServletResponse, body the current and new password
+     * @return A response entity with the change status.
+     */
+    @PostMapping("/change-password")
+    @RateLimited(maxRequests = 5, windowSeconds = 300, message = "Too many password change attempts. Please try again in 5 minutes.")
+    public ResponseEntity<Map<String, Object>> changePassword(HttpServletRequest request, HttpServletResponse response,
+            @RequestBody @Valid ChangePasswordRequest body) {
+
+        String accessToken = CookieUtil.getCookieValue(request, "access_token")
+                .orElseThrow(() -> new UnauthorizedException("Your session has ended. Sign in again."));
+
+        changePasswordService.changePassword(accessToken, body.getCurrentPassword(), body.getNewPassword(), request, response);
+
+        Map<String, Object> responseBody = Map.of(
+                "message", "Your password has been updated",
                 "success", true,
                 "timestamp", LocalDateTime.now().toString());
 

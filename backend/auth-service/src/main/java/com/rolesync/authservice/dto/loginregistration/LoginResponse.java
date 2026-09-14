@@ -29,4 +29,7 @@ public class LoginResponse {
     @NotBlank(message = "code is needed")
     private String statusCode;
 
+    /** The password is a temporary one from a workspace admin: the app asks for a new one first. */
+    private boolean mustChangePassword;
+
 }

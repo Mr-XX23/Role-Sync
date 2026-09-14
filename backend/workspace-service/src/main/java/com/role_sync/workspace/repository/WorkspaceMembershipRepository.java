@@ -16,8 +16,19 @@ public interface WorkspaceMembershipRepository extends JpaRepository<WorkspaceMe
     List<WorkspaceMembership> findByWorkspaceWorkspaceId(UUID workspaceId);
     List<WorkspaceMembership> findByProfileProfileId(UUID profileId);
 
-    @Query("SELECT wm.workspace FROM WorkspaceMembership wm WHERE wm.profile.profileId = :profileId AND wm.isActive = true")
+    /** The profile's active workspaces, the one they joined first leading (their default). */
+    @Query("SELECT wm.workspace FROM WorkspaceMembership wm WHERE wm.profile.profileId = :profileId AND wm.isActive = true " +
+           "ORDER BY wm.joinedAt ASC")
     List<Workspace> findActiveWorkspacesByProfileId(@Param("profileId") UUID profileId);
+
+    /** Every membership of a workspace (active or not) with its profile and role, oldest first. */
+    @Query("SELECT wm FROM WorkspaceMembership wm JOIN FETCH wm.profile JOIN FETCH wm.role " +
+           "WHERE wm.workspace.workspaceId = :workspaceId ORDER BY wm.joinedAt ASC")
+    List<WorkspaceMembership> findMembersOfWorkspace(@Param("workspaceId") UUID workspaceId);
+
+    @Query("SELECT wm FROM WorkspaceMembership wm JOIN FETCH wm.profile JOIN FETCH wm.role JOIN FETCH wm.workspace " +
+           "WHERE wm.membershipId = :membershipId")
+    Optional<WorkspaceMembership> findWithProfileAndRole(@Param("membershipId") UUID membershipId);
 
     @Query("SELECT wm FROM WorkspaceMembership wm JOIN FETCH wm.workspace w WHERE wm.profile.profileId = :profileId AND wm.isActive = true")
     List<WorkspaceMembership> findActiveMembershipsWithWorkspace(@Param("profileId") UUID profileId);

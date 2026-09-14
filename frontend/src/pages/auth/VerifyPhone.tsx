@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Phone, Hash, ShieldCheck, ArrowLeft, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { LegalLinks } from '../../components/common/LegalLinks';
 import { Button } from '../../components/common/Button';
 import { OtpInput } from '../../components/common/OtpInput';
 import { useAppDispatch, useAppSelector } from '../../store';
@@ -241,6 +242,7 @@ const VerifyPhone: React.FC = () => {
               <p className="font-mono text-[12px] text-muted-foreground/90">
                 © {new Date().getFullYear()} RoleSync AI.
               </p>
+              <LegalLinks />
             </div>
           </div>
         ) : (
@@ -407,6 +409,7 @@ const VerifyPhone: React.FC = () => {
               <p className="font-mono text-[12px] text-muted-foreground/90">
                 © {new Date().getFullYear()} RoleSync AI.
               </p>
+              <LegalLinks />
             </div>
           </div>
         )}

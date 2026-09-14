@@ -25,6 +25,9 @@ public interface UserRepository extends JpaRepository<AuthUserCredentials, UUID>
 
     Optional<AuthUserCredentials> findByEmail(String email);
 
+    /** Emails are stored as typed at sign-up, so lookups by an admin-entered address ignore case. */
+    Optional<AuthUserCredentials> findFirstByEmailIgnoreCaseOrderByCreatedAtAsc(String email);
+
     Optional<AuthUserCredentials> findByPhoneNumber(String phoneNumber);
 
     Optional<AuthUserCredentials> findByUsername(String username);

@@ -22,6 +22,8 @@ const COLUMNS = [
       { label: 'About us', to: '/about' },
       { label: 'Contact', to: '/contact' },
       { label: 'Support', to: '/salesman/support' },
+      { label: 'Privacy Policy', to: '/privacy' },
+      { label: 'Terms of Service', to: '/terms' },
     ],
   },
   {
@@ -102,9 +104,11 @@ export const Footer: React.FC = () => {
           </div>
 
           <div className="mt-12 pt-6 border-t border-border/60 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <p className="text-xs text-muted-foreground">
-              © {new Date().getFullYear()} {BRAND.name}. All rights reserved.
-            </p>
+            <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <span>© {new Date().getFullYear()} {BRAND.name}. All rights reserved.</span>
+              <Link to="/privacy" className="hover:text-foreground transition-colors">Privacy</Link>
+              <Link to="/terms" className="hover:text-foreground transition-colors">Terms</Link>
+            </div>
             <button
               type="button"
               onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
