@@ -32,7 +32,6 @@ import { connectorApi, type GmailActivity, type GmailActivityItem } from '../../
 interface ConnectorActivityModalProps {
   isOpen: boolean;
   onClose: () => void;
-  userId?: string;
   source?: string;
   sourceName?: string;
   logoUrl?: string;
@@ -42,7 +41,6 @@ interface ConnectorActivityModalProps {
 export const ConnectorActivityModal: React.FC<ConnectorActivityModalProps> = ({
   isOpen,
   onClose,
-  userId = 'usr_active',
   source = 'gmail',
   sourceName = 'Gmail',
   logoUrl,
@@ -66,7 +64,7 @@ export const ConnectorActivityModal: React.FC<ConnectorActivityModalProps> = ({
   const handleRetryFailedItems = async () => {
     setIsRetryingFailed(true);
     try {
-      const res = await connectorApi.retryFailedItems(source, userId);
+      const res = await connectorApi.retryFailedItems(source);
       const count = res?.retried_count ?? 0;
       setNotification({
         type: 'success',
@@ -91,8 +89,8 @@ export const ConnectorActivityModal: React.FC<ConnectorActivityModalProps> = ({
     setIsLoading(true);
     try {
       const [actRes, sumRes] = await Promise.allSettled([
-        connectorApi.getSourceActivities(source, userId, 20),
-        connectorApi.getSourceDataSummary(source, userId),
+        connectorApi.getSourceActivities(source, 20),
+        connectorApi.getSourceDataSummary(source),
       ]);
 
       // If source switched or a newer fetch started, discard response
@@ -126,7 +124,7 @@ export const ConnectorActivityModal: React.FC<ConnectorActivityModalProps> = ({
     setShowPurgeConfirm(true);
     setIsLoadingSummary(true);
     try {
-      const res = await connectorApi.getSourceDataSummary(source, userId);
+      const res = await connectorApi.getSourceDataSummary(source);
       setDataSummary(res.summary || null);
     } catch (err) {
       console.error("Failed to fetch data summary for purge preview:", err);
@@ -138,7 +136,7 @@ export const ConnectorActivityModal: React.FC<ConnectorActivityModalProps> = ({
   const handleExecutePurge = async () => {
     setIsPurging(true);
     try {
-      const res = await connectorApi.purgeSourceData(source, userId);
+      const res = await connectorApi.purgeSourceData(source);
       setActivities([]);
       setDataSummary({
         synced_messages_count: 0,
@@ -192,7 +190,7 @@ export const ConnectorActivityModal: React.FC<ConnectorActivityModalProps> = ({
 
       const pollInterval = setInterval(() => {
         connectorApi
-          .getSourceActivities(source, userId, 20)
+          .getSourceActivities(source, 20)
           .then((res) => {
             if (res?.activities) {
               setActivities(res.activities);
@@ -201,7 +199,7 @@ export const ConnectorActivityModal: React.FC<ConnectorActivityModalProps> = ({
           .catch(() => {});
 
         connectorApi
-          .getSourceDataSummary(source, userId)
+          .getSourceDataSummary(source)
           .then((res) => {
             if (res?.summary) {
               setDataSummary(res.summary);
@@ -215,7 +213,7 @@ export const ConnectorActivityModal: React.FC<ConnectorActivityModalProps> = ({
         activeFetchIdRef.current++;
       };
     }
-  }, [isOpen, userId, source]);
+  }, [isOpen, source]);
 
   if (!isOpen) return null;
 

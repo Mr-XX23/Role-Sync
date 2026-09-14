@@ -17,6 +17,7 @@ from module_1_document_processing.composio_connector.calendar_models import (
     CalendarSyncActivity,
 )
 from module_1_document_processing.composio_connector.calendar_store import CalendarStore
+from module_1_document_processing.composio_connector.workspace_scope import workspace_connections
 from module_1_document_processing.composio_connector.normalizers.calendar_normalizer import normalize_calendar
 from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent, EventType
 from module_1_document_processing.composio_connector.date_utils import normalize_to_utc, ensure_iso_str
@@ -946,7 +947,7 @@ class CalendarSyncManager:
             try:
                 await asyncio.sleep(60)
                 now = datetime.now(timezone.utc)
-                connections = self.store.list_all_active_connections()
+                connections = workspace_connections(self.store.list_all_active_connections(), "CalendarSyncManager")
                 for conn in connections:
                     if conn.status not in (
                         CalendarSyncStatus.CONNECTED,

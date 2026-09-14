@@ -22,6 +22,7 @@ from module_1_document_processing.composio_connector.notion_models import (
     HistoricalSyncStatus,
 )
 from module_1_document_processing.composio_connector.notion_store import NotionStore
+from module_1_document_processing.composio_connector.workspace_scope import workspace_connections
 from module_1_document_processing.pipeline.queue_worker import QueueWorker
 from module_1_document_processing.composio_connector.rate_limiter import global_rate_limiter
 from module_1_document_processing.composio_connector.error_classifier import classify_error, ConnectorAction, ConnectorErrorType
@@ -618,14 +619,20 @@ class NotionSyncManager:
         self,
         event: CanonicalEvent,
         raw_payload: dict[str, Any] | None = None,
+        connection: NotionConnection | None = None,
     ) -> dict[str, Any]:
-        """Processes real-time Notion webhook events from Composio."""
+        """Processes real-time Notion webhook events from Composio.
+
+        ``connection`` pins the event to that connection: none of the fallbacks below
+        run, so an event simulated by a signed-in member can't reach another user's
+        or workspace's connection.
+        """
         meta = (raw_payload or {}).get("metadata", {}) if isinstance(raw_payload, dict) else {}
         trigger_id = meta.get("trigger_id") or meta.get("trigger_slug") or (event.raw_ref or {}).get("trigger_id")
 
-        conn = None
+        conn = connection
         # 1. Match by trigger_id if available
-        if trigger_id:
+        if not conn and trigger_id:
             conn = self.store.find_connection_by_trigger_id(trigger_id)
 
         # 2. Check if event.user_id matches an existing connection
@@ -775,7 +782,7 @@ class NotionSyncManager:
                     break
 
                 now = datetime.now(timezone.utc)
-                active_conns = self.store.list_all_active_connections()
+                active_conns = workspace_connections(self.store.list_all_active_connections(), "NotionSyncManager")
 
                 for conn in active_conns:
                     if not getattr(conn.config, "auto_sync_enabled", False):

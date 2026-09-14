@@ -73,13 +73,12 @@ class EnterpriseStore:
         record_copy.pop("_id", None)
         return record_copy
 
-    def get_requests(self, user_id: str, tenant_id: str | None = None) -> list[dict]:
+    def get_requests(self, user_id: str, tenant_id: str) -> list[dict]:
+        """The user's requests in one workspace."""
         results: list[dict] = []
         if self._db is not None:
             try:
-                query: dict = {"user_id": user_id}
-                if tenant_id and tenant_id != "tenant_default":
-                    query["tenant_id"] = tenant_id
+                query: dict = {"user_id": user_id, "tenant_id": tenant_id}
                 cursor = self._db.enterprise_sync_requests.find(query).sort("created_at", -1)
                 for doc in cursor:
                     doc.pop("_id", None)
@@ -91,24 +90,28 @@ class EnterpriseStore:
 
         with self._lock:
             for r in self._requests.values():
-                if r.get("user_id") == user_id:
-                    if not tenant_id or tenant_id == "tenant_default" or r.get("tenant_id") == tenant_id:
-                        r_copy = dict(r)
-                        r_copy.pop("_id", None)
-                        results.append(r_copy)
+                if r.get("user_id") == user_id and r.get("tenant_id") == tenant_id:
+                    r_copy = dict(r)
+                    r_copy.pop("_id", None)
+                    results.append(r_copy)
 
         results.sort(key=lambda x: x.get("created_at", ""), reverse=True)
         return results
 
-    def cancel_request(self, request_id: str, user_id: str) -> bool:
+    def cancel_request(self, request_id: str, user_id: str, tenant_id: str) -> bool:
+        """Removes the user's own request in this workspace; False if there was none."""
         with self._lock:
-            if request_id in self._requests:
+            record = self._requests.get(request_id)
+            removed = bool(record and record.get("user_id") == user_id and record.get("tenant_id") == tenant_id)
+            if removed:
                 del self._requests[request_id]
 
         if self._db is not None:
             try:
-                res = self._db.enterprise_sync_requests.delete_one({"request_id": request_id, "user_id": user_id})
+                res = self._db.enterprise_sync_requests.delete_one(
+                    {"request_id": request_id, "user_id": user_id, "tenant_id": tenant_id}
+                )
                 return res.deleted_count > 0
             except Exception as e:
                 logger.error(f"[EnterpriseStore] Error deleting request {request_id}: {e}")
-        return True
+        return removed
