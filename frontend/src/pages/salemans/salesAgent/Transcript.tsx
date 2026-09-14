@@ -84,6 +84,12 @@ const TOOL_LABEL: Record<string, string> = {
   get_my_profile: 'Read your profile',
   update_my_profile: 'Update your profile',
   update_my_preferences: 'Change your settings',
+  list_connected_apps: 'Check connected apps',
+  get_app_sync_history: 'App sync history',
+  sync_app_now: 'Sync app',
+  change_app_sync_settings: 'Change app sync settings',
+  set_app_auto_sync: 'Set app auto-sync',
+  disconnect_app: 'Disconnect app',
   remember: 'Remember',
   recall: 'Recall',
   forget: 'Forget',
@@ -119,6 +125,10 @@ const WRITE_TOOLS = new Set([
   'delete_knowledge_document',
   'update_my_profile',
   'update_my_preferences',
+  'sync_app_now',
+  'change_app_sync_settings',
+  'set_app_auto_sync',
+  'disconnect_app',
 ]);
 const MEMORY_TOOLS = new Set(['remember', 'forget']);
 /** Handing part of the job to a sub-agent; its own steps stream in under its name. */
@@ -154,6 +164,10 @@ const WHERE_TO_CHECK: Record<string, string> = {
   reserve_stock: ' (check the stock reservations)',
   release_stock: ' (check the stock reservations)',
   update_my_profile: ' (check your Profile page)',
+  sync_app_now: ' (check the app on the Connectors page)',
+  change_app_sync_settings: ' (check the app on the Connectors page)',
+  set_app_auto_sync: ' (check the app on the Connectors page)',
+  disconnect_app: ' (check the app on the Connectors page)',
 };
 
 function describeResult(item: TranscriptItem): string | null | undefined {
@@ -182,6 +196,16 @@ function outcomeIcon(outcome: string) {
       return AlertTriangle;
   }
 }
+
+const APP_NAME: Record<string, string> = {
+  gmail: 'Gmail',
+  calendar: 'Google Calendar',
+  slack: 'Slack',
+  drive: 'Google Drive',
+  notion: 'Notion',
+};
+
+const appName = (value: unknown): string => (typeof value === 'string' ? (APP_NAME[value] ?? value) : '');
 
 function describeCall(item: TranscriptItem): string {
   const args = item.args ?? {};
@@ -269,6 +293,19 @@ function describeCall(item: TranscriptItem): string {
         .filter((field) => args[field] !== null && args[field] !== undefined)
         .map((field) => field.replace(/_url$/, '').replace(/_/g, ' '))
         .join(', ');
+    case 'sync_app_now':
+    case 'disconnect_app':
+    case 'get_app_sync_history':
+      return appName(args.app);
+    case 'set_app_auto_sync':
+      return [appName(args.app), typeof args.schedule === 'string' ? args.schedule : ''].filter(Boolean).join(' · ');
+    case 'change_app_sync_settings':
+      return [
+        appName(args.app),
+        Object.keys(args).filter((field) => field !== 'app' && args[field] !== null && args[field] !== undefined).map((field) => field.replace(/_/g, ' ')).join(', '),
+      ]
+        .filter(Boolean)
+        .join(' · ');
     case 'update_my_preferences':
       return Object.entries(args)
         .filter(([, value]) => value !== null && value !== undefined)
@@ -286,6 +323,7 @@ function describeCall(item: TranscriptItem): string {
     case 'restore_catalog_item':
     case 'describe_catalog':
     case 'get_my_profile':
+    case 'list_connected_apps':
     case 'release_stock':
     case 'forget':
     case 'read_offloaded_result':

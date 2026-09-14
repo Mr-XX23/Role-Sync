@@ -22,10 +22,13 @@ import {
   RefreshCw,
   Settings2,
   ShieldCheck,
+  SlidersHorizontal,
   Tags,
+  Timer,
   Trash2,
   Truck,
   Undo2,
+  Unplug,
   UserPen,
   Warehouse,
 } from 'lucide-react';
@@ -66,6 +69,10 @@ const KINDS: Record<string, { title: string; approve: string; icon: LucideIcon }
   knowledge_delete: { title: 'Delete this document?', approve: 'Approve & delete', icon: Trash2 },
   profile_update: { title: 'Update your profile?', approve: 'Approve & update', icon: UserPen },
   preferences_update: { title: 'Change your settings?', approve: 'Approve & change', icon: Settings2 },
+  connector_sync: { title: 'Sync this app now?', approve: 'Approve & sync', icon: RefreshCw },
+  connector_settings: { title: 'Change what this app syncs?', approve: 'Approve & save', icon: SlidersHorizontal },
+  connector_schedule: { title: 'Change this app’s auto-sync?', approve: 'Approve & change', icon: Timer },
+  connector_disconnect: { title: 'Disconnect this app?', approve: 'Approve & disconnect', icon: Unplug },
   undo: { title: 'Undo these actions?', approve: 'Undo them', icon: Undo2 },
 };
 

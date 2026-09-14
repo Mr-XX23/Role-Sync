@@ -728,6 +728,70 @@ const PreferencesUpdatePreview: React.FC<{ preview: Preview }> = ({ preview }) =
   </div>
 );
 
+const ConnectorSyncPreview: React.FC<{ preview: Preview }> = ({ preview }) => (
+  <div className="space-y-2 text-sm">
+    <PreviewRow label="App" value={<span className="font-semibold">{text(preview.name)}</span>} />
+    {text(preview.up_to) && <PreviewRow label="Takes in" value={`Up to ${text(preview.up_to)} new ${text(preview.unit)}`} />}
+    <PreviewRow label="So far" value={`${text(preview.items_synced) || '0'} ${text(preview.unit)} synced`} />
+    <p className="text-xs text-muted-foreground">
+      The sync runs in the background. What it finds goes into your private part of the knowledge base: only you and
+      your agent can search it.
+    </p>
+  </div>
+);
+
+const CONNECTOR_SETTING_LABEL: Record<string, string> = {
+  max_per_sync: 'Per sync',
+  window_days: 'Days back',
+  categories: 'Syncs',
+  future_window_days: 'Days ahead',
+};
+
+const connectorSetting = (value: unknown): unknown =>
+  Array.isArray(value) ? value.map((item) => capitalized(text(item).toLowerCase().replace(/_/g, ' '))) : value;
+
+const ConnectorSettingsPreview: React.FC<{ preview: Preview }> = ({ preview }) => (
+  <div className="space-y-2 text-sm">
+    <PreviewRow label="App" value={<span className="font-semibold">{text(preview.name)}</span>} />
+    <DataTable
+      columns={['Setting', 'Change']}
+      rows={list(preview.changes).map((raw) => {
+        const change = record(raw);
+        const field = text(change.field);
+        return [
+          CONNECTOR_SETTING_LABEL[field] ?? field,
+          <BeforeAfter before={connectorSetting(change.before)} after={connectorSetting(change.after)} />,
+        ];
+      })}
+    />
+    <p className="text-xs text-muted-foreground">
+      Saving starts a sync with these settings; everything else, auto-sync included, stays as it is. Undoing puts the
+      previous settings back and starts another sync.
+    </p>
+  </div>
+);
+
+const ConnectorSchedulePreview: React.FC<{ preview: Preview }> = ({ preview }) => (
+  <div className="space-y-2 text-sm">
+    <PreviewRow label="App" value={<span className="font-semibold">{text(preview.name)}</span>} />
+    <PreviewRow label="Auto-sync" value={<BeforeAfter before={capitalized(preview.before)} after={capitalized(preview.after)} />} />
+    <p className="text-xs text-muted-foreground">Real-time updates stay as they are. Undoing puts the previous schedule back.</p>
+  </div>
+);
+
+const ConnectorDisconnectPreview: React.FC<{ preview: Preview }> = ({ preview }) => (
+  <div className="space-y-2 text-sm">
+    <PreviewRow label="App" value={<span className="font-semibold">{text(preview.name)}</span>} />
+    <Warning>
+      RoleSync is signed out of {text(preview.name)} in every workspace, and your agent can no longer use it for you.
+      To use it again, connect it on the Connectors page in a browser. This can’t be undone here.
+    </Warning>
+    <p className="text-xs text-muted-foreground">
+      The {text(preview.items_synced) || '0'} {text(preview.unit)} already synced stay in your knowledge base.
+    </p>
+  </div>
+);
+
 export const UndoPreview: React.FC<{
   preview: Preview;
   selected?: Set<string>;
@@ -836,6 +900,14 @@ export const PreviewBody: React.FC<{ card: ApprovalCardModel }> = ({ card }) => 
       return <ProfileUpdatePreview preview={preview} />;
     case 'preferences_update':
       return <PreferencesUpdatePreview preview={preview} />;
+    case 'connector_sync':
+      return <ConnectorSyncPreview preview={preview} />;
+    case 'connector_settings':
+      return <ConnectorSettingsPreview preview={preview} />;
+    case 'connector_schedule':
+      return <ConnectorSchedulePreview preview={preview} />;
+    case 'connector_disconnect':
+      return <ConnectorDisconnectPreview preview={preview} />;
     case 'undo':
       return <UndoPreview preview={preview} />;
     default:
