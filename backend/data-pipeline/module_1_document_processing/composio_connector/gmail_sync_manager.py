@@ -21,6 +21,7 @@ from module_1_document_processing.composio_connector.gmail_models import (
     HistoricalSyncStatus,
 )
 from module_1_document_processing.composio_connector.gmail_store import GmailStore
+from module_1_document_processing.composio_connector.workspace_scope import workspace_connections
 from module_1_document_processing.pipeline.queue_worker import QueueWorker
 from module_1_document_processing.composio_connector.rate_limiter import global_rate_limiter
 from module_1_document_processing.composio_connector.error_classifier import classify_error, ConnectorAction, ConnectorErrorType
@@ -981,7 +982,7 @@ class GmailSyncManager:
                 # Periodic tick every 20 seconds for responsive auto-sync triggers
                 await asyncio.sleep(20)
                 now = datetime.now(timezone.utc)
-                connections = self.store.list_all_active_connections()
+                connections = workspace_connections(self.store.list_all_active_connections(), "GmailSyncManager")
 
                 for conn in connections:
                     # Only run auto-sync for connected tools in ready states

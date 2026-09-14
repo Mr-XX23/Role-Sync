@@ -19,6 +19,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from module_1_document_processing.composio_connector.workspace_scope import workspace_connections
 from module_1_document_processing.del_acl_and_reconc.live_source_lister import (
     SWEEPABLE_SOURCES,
     LiveSourceLister,
@@ -122,7 +123,9 @@ class ReconciliationScheduler:
                 continue
 
             try:
-                connections = manager.store.list_all_active_connections()
+                connections = workspace_connections(
+                    manager.store.list_all_active_connections(), "ReconciliationScheduler"
+                )
             except Exception as err:
                 print(f"[ReconciliationScheduler] Could not list {source} connections: {err}")
                 continue

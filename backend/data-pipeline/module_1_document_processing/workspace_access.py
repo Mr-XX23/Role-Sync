@@ -1,4 +1,4 @@
-"""Workspace membership for workspace-scoped routes (knowledge vault, catalog).
+"""Workspace membership for workspace-scoped routes (knowledge vault, catalog, connectors).
 
 The gateway verifies *who* the caller is and injects ``X-User-Id``. *Which workspace* the
 caller acts in comes from ``X-Tenant-Id``, which nothing upstream verifies, so these routes
@@ -110,6 +110,14 @@ directory = MembershipDirectory(
     os.environ.get("WORKSPACE_SERVICE_URL", "http://workspace-service:8083"),
     cache_seconds=float(os.environ.get("WORKSPACE_MEMBERSHIP_CACHE_SECONDS", "60")),
 )
+
+
+def is_workspace_id(value: object) -> bool:
+    """True for a workspace id in the canonical form routes store it in (lower-case UUID)."""
+    try:
+        return str(UUID(str(value))) == value
+    except ValueError:
+        return False
 
 
 def resolve_workspace_access(user_id: str, tenant_header: Optional[str]) -> WorkspaceAccess:

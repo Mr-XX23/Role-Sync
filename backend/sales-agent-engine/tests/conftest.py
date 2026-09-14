@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 import pytest
 from pydantic import SecretStr
@@ -8,7 +9,10 @@ from pydantic import SecretStr
 from app.config import Settings
 from tests.support import RsaKeys, generate_rsa_keys
 
-TEST_DB_NAME = "rolesync-micro-sales-agent-test"
+# Two checkouts running the integration suite at once would truncate each other's tables and flush
+# each other's Redis db, so each can pick its own (e.g. SALES_AGENT_TEST_DB_NAME=...-test-admin).
+TEST_DB_NAME = os.environ.get("SALES_AGENT_TEST_DB_NAME", "rolesync-micro-sales-agent-test")
+TEST_REDIS_DB = int(os.environ.get("SALES_AGENT_TEST_REDIS_DB", "15"))
 
 
 def pytest_asyncio_loop_factories(config, item):
@@ -38,7 +42,7 @@ def rsa_keys() -> RsaKeys:
 def settings(rsa_keys: RsaKeys) -> Settings:
     settings = Settings(
         db_name=TEST_DB_NAME,
-        redis_db=15,
+        redis_db=TEST_REDIS_DB,
         redis_key_prefix="sae-test",
         jwt_public_key_pem=SecretStr(rsa_keys.public_pem),
         jwt_jwks_url=None,
@@ -57,4 +61,6 @@ def settings(rsa_keys: RsaKeys) -> Settings:
         run_lease_seconds=5,
     )
     assert settings.sqlalchemy_url.database == TEST_DB_NAME, "tests must never touch the dev database"
+    assert "-test" in TEST_DB_NAME, "the test database name must contain '-test' (the suite truncates its tables)"
+    assert TEST_REDIS_DB != 0, "the test Redis db is flushed between tests; never use db 0"
     return settings

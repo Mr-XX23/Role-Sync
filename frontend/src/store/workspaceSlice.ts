@@ -35,14 +35,25 @@ export interface WorkspaceProfile {
   updatedAt?: string;
 }
 
+/** The workspace's plan and the limits it sets (null: no plan limit, platform defaults apply). */
+export interface WorkspacePlan {
+  planId: string;
+  code: string;
+  name: string;
+  maxMembers: number | null;
+  agentTokensPerDay: number | null;
+  maxConcurrentAgentRuns: number | null;
+}
+
 export interface WorkspaceItem {
   workspaceId: string;
   name: string;
   description: string;
-  isActive: boolean;
+  isActive: boolean; // false: suspended by the RoleSync team
   createdAt?: string;
   updatedAt?: string;
   role?: string | null; // the signed-in user's role: OWNER, ADMIN, MEMBER or VIEWER
+  plan?: WorkspacePlan | null;
 }
 
 export type WorkspaceStatus = 'idle' | 'loading' | 'ready' | 'failed';
@@ -120,9 +131,12 @@ export const ensureWorkspace = createAsyncThunk(
       const listed = (await api.get<WorkspaceItem[]>('/workspaces')).data;
       const workspaces = listed.length > 0 ? listed : [ensured];
       const remembered = readRememberedWorkspace();
+      // A suspended workspace is only picked when there is nothing else (the gate then explains why).
+      const usable = workspaces.filter((ws) => ws.isActive !== false);
       const current =
-        workspaces.find((ws) => ws.workspaceId === remembered) ??
-        workspaces.find((ws) => ws.workspaceId === ensured.workspaceId) ??
+        usable.find((ws) => ws.workspaceId === remembered) ??
+        usable.find((ws) => ws.workspaceId === ensured.workspaceId) ??
+        usable[0] ??
         workspaces[0];
       rememberWorkspace(current.workspaceId);
       return { userId, workspaces, current };

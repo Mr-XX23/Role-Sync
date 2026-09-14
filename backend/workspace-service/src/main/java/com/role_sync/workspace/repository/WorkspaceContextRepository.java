@@ -16,6 +16,8 @@ import java.util.UUID;
 public interface WorkspaceContextRepository extends JpaRepository<WorkspaceContext, UUID> {
     List<WorkspaceContext> findByWorkspaceWorkspaceId(UUID workspaceId);
 
+    long countByWorkspaceWorkspaceId(UUID workspaceId);
+
     @Query("SELECT c.workspace.workspaceId FROM WorkspaceContext c WHERE c.contextId = :contextId")
     Optional<UUID> findWorkspaceIdByContextId(@Param("contextId") UUID contextId);
 
