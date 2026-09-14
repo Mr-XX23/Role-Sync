@@ -67,6 +67,10 @@ public class AuthAccountClient {
     private record LookupBody(List<UUID> authUserIds) {
     }
 
+    /** Whether an account is a platform super admin, as auth-service decides it (email null for an unknown account). */
+    public record PlatformAccess(UUID authUserId, boolean superAdmin, String email) {
+    }
+
     private final WebClient webClient;
     private final String token;
 
@@ -115,6 +119,35 @@ public class AuthAccountClient {
             accounts.forEach(account -> byId.put(account.authUserId(), account));
         }
         return byId;
+    }
+
+    /**
+     * Whether this account may use the Super Admin Console. auth-service is the only place that
+     * decides it; an unreachable auth-service means "can't tell", which callers treat as no.
+     */
+    public PlatformAccess platformAccess(UUID authUserId) {
+        if (token.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "The Super Admin Console isn't set up yet: INTERNAL_SERVICE_TOKEN is missing on the server.");
+        }
+        try {
+            return webClient.get()
+                    .uri("/internal/v1/accounts/" + authUserId + "/platform-access")
+                    .header(TOKEN_HEADER, token)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::isError, AuthAccountClient::toError)
+                    .bodyToMono(new ParameterizedTypeReference<PlatformAccess>() { })
+                    .timeout(QUICK)
+                    .block();
+        } catch (RuntimeException e) {
+            Throwable cause = Exceptions.unwrap(e);
+            if (cause instanceof ResponseStatusException status) {
+                throw status;
+            }
+            log.error("auth-service platform-access check failed for {}: {}", authUserId, cause.getMessage());
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "The account service is unavailable right now, so your access can't be checked. Try again in a moment.");
+        }
     }
 
     private <T> T post(String path, Object body, ParameterizedTypeReference<T> type, Duration timeout) {

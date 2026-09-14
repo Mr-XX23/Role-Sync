@@ -192,6 +192,62 @@ export interface PlanInput {
   sort_order: number;
 }
 
+// Support tickets (workspace-service)
+
+export type SupportTicketStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
+
+export interface AdminSupportTicket {
+  ticket_id: string;
+  subject: string;
+  status: SupportTicketStatus;
+  /** Replies on the ticket (the description itself is not one). */
+  message_count: number;
+  last_message_at: string | null;
+  /** false while the reporter is waiting for the team's answer. */
+  last_message_from_support: boolean;
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+  workspace: { workspace_id: string; name: string; is_active: boolean };
+  reporter: { profile_id: string; auth_user_id: string; name: string; email: string | null };
+}
+
+export interface AdminSupportTicketMessage {
+  message_id: string;
+  author_auth_user_id: string;
+  author_name: string;
+  from_support: boolean;
+  body: string;
+  created_at: string;
+}
+
+export interface AdminSupportTicketDetail {
+  ticket: AdminSupportTicket;
+  description: string;
+  messages: AdminSupportTicketMessage[];
+}
+
+export interface AdminSupportTicketStats {
+  total: number;
+  open: number;
+  in_progress: number;
+  resolved: number;
+  closed: number;
+  /** Open or in-progress tickets where the reporter wrote last. */
+  awaiting_support: number;
+  opened_last_7_days: number;
+}
+
+export interface SupportTicketFilters {
+  q?: string;
+  status?: SupportTicketStatus | '';
+  workspace_id?: string;
+  /** Only tickets awaiting the team's reply. */
+  awaiting?: boolean;
+  page: number;
+  size: number;
+}
+
 export interface WorkspaceStats {
   workspaces_total: number;
   workspaces_active: number;
@@ -441,6 +497,14 @@ export const adminApi = {
   restorePlan: (planId: string) => post<AdminPlan>(`${WORKSPACE}/plans/${id(planId)}/restore`),
   workspaceStats: (days = 30) => get<WorkspaceStats>(`${WORKSPACE}/stats`, { days }),
   workspaceAudit: (limit = 100) => get<AuditEntry[]>(`${WORKSPACE}/audit`, { limit }),
+  supportTickets: (filters: SupportTicketFilters) =>
+    get<Page<AdminSupportTicket>>(`${WORKSPACE}/support-tickets`, { ...filters, awaiting: filters.awaiting ? 'true' : '' }),
+  supportTicketStats: () => get<AdminSupportTicketStats>(`${WORKSPACE}/support-tickets/stats`),
+  supportTicket: (ticketId: string) => get<AdminSupportTicketDetail>(`${WORKSPACE}/support-tickets/${id(ticketId)}`),
+  replySupportTicket: (ticketId: string, body: string) =>
+    post<AdminSupportTicketDetail>(`${WORKSPACE}/support-tickets/${id(ticketId)}/messages`, { body }),
+  setSupportTicketStatus: (ticketId: string, status: SupportTicketStatus, note: string | null) =>
+    put<AdminSupportTicketDetail>(`${WORKSPACE}/support-tickets/${id(ticketId)}/status`, { status, note }),
 
   // sales-agent-engine
   agentOverview: () => get<AgentOverview>(`${AGENT}/overview`),

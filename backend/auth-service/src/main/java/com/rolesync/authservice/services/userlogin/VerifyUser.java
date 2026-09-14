@@ -4,6 +4,7 @@ import com.rolesync.authservice.exceptions.UnauthorizedException;
 import com.rolesync.authservice.models.AuthUserCredentials;
 import com.rolesync.authservice.repository.UserRepository;
 import com.rolesync.authservice.services.JwtService;
+import com.rolesync.authservice.services.admin.PlatformAdminPolicy;
 import java.util.HashMap;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -18,6 +19,7 @@ public class VerifyUser {
 
     private final UserRepository userRepository;
     private final JwtService jwtUtil;
+    private final PlatformAdminPolicy platformAdminPolicy;
 
     public HashMap<String, Object> verifyAndGetUserDetails(String token) {
         try {
@@ -32,7 +34,10 @@ public class VerifyUser {
             AuthUserCredentials user = userRepository.findById(UUID.fromString(userId))
                     .orElseThrow(() -> new UnauthorizedException("User not found"));
 
-            return (getStringObjectMap(user));
+            HashMap<String, Object> details = getStringObjectMap(user);
+            // Who may open the Super Admin Console; the console's APIs check this again on every call.
+            details.put("platformRole", platformAdminPolicy.platformRole(user));
+            return details;
 
         } catch (UnauthorizedException e) {
             throw e;

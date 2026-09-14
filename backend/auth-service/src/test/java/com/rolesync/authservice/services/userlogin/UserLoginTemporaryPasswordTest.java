@@ -9,6 +9,7 @@ import com.rolesync.authservice.services.AccountLockoutService;
 import com.rolesync.authservice.services.CookiesService;
 import com.rolesync.authservice.services.JwtService;
 import com.rolesync.authservice.services.TokenService;
+import com.rolesync.authservice.services.admin.PlatformAdminPolicy;
 import com.rolesync.authservice.services.user.PasswordPolicy;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -63,7 +64,8 @@ class UserLoginTemporaryPasswordTest {
 
     @BeforeEach
     void setUp() {
-        userLogin = new UserLogin(userRepository, encoder, jwtService, tokenService, cookiesService, loginUtilities, lockoutService);
+        userLogin = new UserLogin(userRepository, encoder, jwtService, tokenService, cookiesService, loginUtilities, lockoutService,
+                new PlatformAdminPolicy(""));
         user = AuthUserCredentials.builder()
                 .authUserId(UUID.randomUUID()).email("jane@acme.com").username("Jane").role(Role.SALESMAN)
                 .loginType(AuthUserCredentials.LoginType.EMAIL).status(AuthUserCredentials.Status.ACTIVE)

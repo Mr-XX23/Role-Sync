@@ -32,4 +32,7 @@ public class LoginResponse {
     /** The password is a temporary one from a workspace admin: the app asks for a new one first. */
     private boolean mustChangePassword;
 
+    /** "SUPER_ADMIN" for platform super admins (see PlatformAdminPolicy), otherwise null. */
+    private String platformRole;
+
 }

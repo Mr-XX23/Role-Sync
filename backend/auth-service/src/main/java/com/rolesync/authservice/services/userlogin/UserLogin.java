@@ -9,6 +9,7 @@ import com.rolesync.authservice.services.AccountLockoutService;
 import com.rolesync.authservice.services.CookiesService;
 import com.rolesync.authservice.services.JwtService;
 import com.rolesync.authservice.services.TokenService;
+import com.rolesync.authservice.services.admin.PlatformAdminPolicy;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.constraints.NotBlank;
@@ -35,6 +36,7 @@ public class UserLogin {
     private final CookiesService cookiesService;
     private final LoginUtilities loginUtilities;
     private final AccountLockoutService accountLockoutService;
+    private final PlatformAdminPolicy platformAdminPolicy;
 
     // Login Users
     @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -147,7 +149,7 @@ public class UserLogin {
         }
     }
 
-    private static LoginResponse getLoginResponse(AuthUserCredentials user) {
+    private LoginResponse getLoginResponse(AuthUserCredentials user) {
         LoginResponse loginResponse = new LoginResponse();
         loginResponse.setMessage("Login successful");
         loginResponse.setUsername(user.getUsername());
@@ -158,6 +160,7 @@ public class UserLogin {
         loginResponse.setRole(String.valueOf(user.getRole()));
         loginResponse.setLastLoginTime(String.valueOf(user.getLastLoginAt()));
         loginResponse.setMustChangePassword(user.requiresPasswordChange());
+        loginResponse.setPlatformRole(platformAdminPolicy.platformRole(user));
         return loginResponse;
     }
 
