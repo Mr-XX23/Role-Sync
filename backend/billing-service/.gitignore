@@ -1,0 +1,17 @@
+HELP.md
+target/
+.mvn/wrapper/maven-wrapper.jar
+
+# backend/.gitignore blanket-ignores *.xml and Dockerfile; these must stay tracked
+# or the service cannot be built from a clean clone.
+!pom.xml
+!Dockerfile
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### VS Code ###
+.vscode/

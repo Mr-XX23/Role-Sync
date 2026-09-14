@@ -7,3 +7,5 @@ CREATE DATABASE "rolesync-micro-sales-agent";
 -- RAG: pgvector-backed chunks, parents and lineage. data-pipeline enables the
 -- `vector` extension inside this database on startup.
 CREATE DATABASE "rolesync-micro-rag";
+-- Billing: payments, credit ledger and usage.
+CREATE DATABASE "rolesync-micro-billing";
