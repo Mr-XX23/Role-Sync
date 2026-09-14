@@ -6,6 +6,11 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -73,6 +78,36 @@ public class GlobalExceptionsHandler {
                 .ifPresent(first -> errors.putIfAbsent("message", first.getDefaultMessage()));
         errors.put("status", "400");
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errors);
+    }
+
+    /** Unknown paths must stay 404 rather than fall into the catch-all below. */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Map<String, String>> handleNoResource(NoResourceFoundException ex) {
+        return simple(HttpStatus.NOT_FOUND, "Not found.");
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<Map<String, String>> handleMethodNotSupported(HttpRequestMethodNotSupportedException ex) {
+        return simple(HttpStatus.METHOD_NOT_ALLOWED, ex.getMessage());
+    }
+
+    /** Malformed path/query values (e.g. a user id that is not a UUID) and unreadable JSON bodies. */
+    @ExceptionHandler({MethodArgumentTypeMismatchException.class, HttpMessageNotReadableException.class,
+            MissingServletRequestParameterException.class})
+    public ResponseEntity<Map<String, String>> handleMalformedRequest(Exception ex) {
+        String message = ex instanceof MethodArgumentTypeMismatchException mismatch
+                ? "Invalid value for " + mismatch.getName() + "."
+                : ex instanceof MissingServletRequestParameterException missing
+                ? missing.getMessage()
+                : "The request body could not be read.";
+        return simple(HttpStatus.BAD_REQUEST, message);
+    }
+
+    private static ResponseEntity<Map<String, String>> simple(HttpStatus status, String message) {
+        Map<String, String> error = new HashMap<>();
+        error.put("message", message);
+        error.put("status", String.valueOf(status.value()));
+        return ResponseEntity.status(status).body(error);
     }
 
     @ExceptionHandler(Exception.class)

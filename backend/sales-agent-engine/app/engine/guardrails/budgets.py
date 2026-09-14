@@ -44,6 +44,11 @@ class TenantBudgets:
         self._tokens_per_day = tokens_per_day_per_tenant
         self._clock = clock
 
+    def configure(self, *, turns_per_minute_per_user: int, tokens_per_day_per_tenant: int) -> None:
+        """Apply the Super Admin Console's limits (0 tokens per day means no limit)."""
+        self._turns_per_minute = turns_per_minute_per_user
+        self._tokens_per_day = tokens_per_day_per_tenant
+
     async def admit_turn(self, tenant_id: UUID, user_id: UUID) -> None:
         """Raise ``BudgetExceeded`` if this request may not start now (and count it if it may)."""
         now = self._clock()

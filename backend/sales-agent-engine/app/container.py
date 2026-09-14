@@ -13,6 +13,10 @@ import httpx
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.admin.guard import PlatformAccessClient, PlatformAdminGuard
+from app.admin.metering import usage_meter
+from app.admin.runtime import AdminRuntime
+from app.admin.store import AdminStore
 from app.autonomy.policy import AutonomyPolicy, EscalateAllPolicy
 from app.config import CHECKPOINT_SCHEMA, Settings
 from app.context.manager import ContextBudget, ContextManager
@@ -104,6 +108,8 @@ class Container:
     deals: DealsClient
     skills: SkillService
     runner: Any = None  # SessionRunner; tests may substitute a double
+    admin: AdminRuntime | None = None  # Super Admin Console overrides
+    admin_guard: PlatformAdminGuard | None = None
     _exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack, repr=False)
 
     async def aclose(self) -> None:
@@ -237,10 +243,12 @@ async def build_container(
         )
 
         tracer = tracer or build_tracer(settings)
+        admin_store = AdminStore(sessionmaker)
         model_router = ModelRouter(
             providers if providers is not None else build_providers(settings, http_client),
             routing_rules(settings),
             tracer,
+            meter=usage_meter(admin_store),
         )
         workspaces = WorkspaceDirectory(
             base_url=settings.workspace_service_url,
@@ -351,6 +359,23 @@ async def build_container(
             issuer=settings.jwt_issuer,
             leeway_seconds=settings.jwt_leeway_seconds,
         )
+        admin = AdminRuntime(
+            settings=settings,
+            store=admin_store,
+            redis=redis,
+            router=model_router,
+            registry=registry,
+            budgets=budgets,
+            key_prefix=settings.redis_key_prefix,
+        )
+        admin_guard = PlatformAdminGuard(
+            PlatformAccessClient(
+                base_url=settings.auth_service_base_url(),
+                token=settings.internal_service_token.get_secret_value() if settings.internal_service_token else None,
+                http=http_client,
+            ),
+            ttl_seconds=settings.platform_access_cache_seconds,
+        )
         container = Container(
             settings=settings,
             engine=engine,
@@ -378,6 +403,8 @@ async def build_container(
             context=context,
             deals=deals,
             skills=skills,
+            admin=admin,
+            admin_guard=admin_guard,
             _exit_stack=stack,
         )
         orchestrator = Orchestrator(
@@ -397,7 +424,9 @@ async def build_container(
             budgets=budgets,
             context=context,
             skills=skills,
+            admin=admin,
         )
+        admin.orchestrator = orchestrator
         spec = graph_factory(container) if graph_factory is not None else orchestrator.graph_spec()
         container.runner = SessionRunner(
             runtime=GraphRuntime(spec, checkpointer),

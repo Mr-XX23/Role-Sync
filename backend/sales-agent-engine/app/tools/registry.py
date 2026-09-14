@@ -82,6 +82,7 @@ class ToolDefinition:
 class ToolRegistry:
     def __init__(self, definitions: Iterable[ToolDefinition] = ()) -> None:
         self._tools: dict[str, ToolDefinition] = {}
+        self._disabled: frozenset[str] = frozenset()  # turned off platform-wide in the Super Admin Console
         for definition in definitions:
             self.register(definition)
 
@@ -96,6 +97,12 @@ class ToolRegistry:
     def all(self) -> list[ToolDefinition]:
         return list(self._tools.values())
 
+    def set_disabled(self, names: Iterable[str]) -> None:
+        self._disabled = frozenset(names)
+
+    def is_enabled(self, name: str) -> bool:
+        return name not in self._disabled
+
 
 class AgentScopes:
     def __init__(self, scopes: Mapping[str, frozenset[ToolScope]] = SCOPES) -> None:
@@ -105,4 +112,4 @@ class AgentScopes:
         return definition.scope in self._scopes.get(agent_name, frozenset())
 
     def tools_for(self, agent_name: str, registry: ToolRegistry) -> list[ToolDefinition]:
-        return [d for d in registry.all() if self.allows(agent_name, d)]
+        return [d for d in registry.all() if self.allows(agent_name, d) and registry.is_enabled(d.name)]

@@ -353,3 +353,83 @@ class SkillUsageRow(Base):
     session_id: Mapped[uuid.UUID | None] = mapped_column()
     how: Mapped[str] = mapped_column(Text, nullable=False)
     used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class PromptMode(StrEnum):
+    APPEND = "APPEND"  # the admin's instructions follow the built-in prompt
+    REPLACE = "REPLACE"  # the admin's instructions are the whole prompt
+
+
+class AdminSettingRow(Base):
+    """A Super Admin Console override for every workspace (``controls``, ``tools``, ``routes``, ``rates``).
+    ``version`` goes up on every save, so an admin editing an older copy can be told."""
+
+    __tablename__ = "admin_setting"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    updated_by: Mapped[uuid.UUID | None] = mapped_column()
+    updated_by_email: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class AdminAuditRow(Base):
+    """What a platform super admin changed in the engine (the console's audit log)."""
+
+    __tablename__ = "admin_audit"
+    __table_args__ = (Index("ix_admin_audit_created_at", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    actor_user_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    actor_email: Mapped[str | None] = mapped_column(Text)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    target_type: Mapped[str] = mapped_column(Text, nullable=False)
+    target_id: Mapped[str | None] = mapped_column(Text)
+    target_label: Mapped[str | None] = mapped_column(Text)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class PromptVersionRow(Base):
+    """One published version of an agent's prompt override. The newest version per agent is live;
+    restoring copies an old version as a new one."""
+
+    __tablename__ = "prompt_version"
+    __table_args__ = (
+        CheckConstraint(check_in("mode", PromptMode), name="mode"),
+        UniqueConstraint("agent", "version", name="uq_prompt_version_agent_version"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    agent: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    instructions: Mapped[str] = mapped_column(Text, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    created_by_email: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ModelCallRow(Base):
+    """One completed model call and the tokens it used (usage and cost reports). Identity is empty for
+    calls outside an agent run (an admin's model test, a skill draft)."""
+
+    __tablename__ = "model_call"
+    __table_args__ = (
+        Index("ix_model_call_at", "at"),
+        Index("ix_model_call_session_id", "session_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column()
+    user_id: Mapped[uuid.UUID | None] = mapped_column()
+    session_id: Mapped[uuid.UUID | None] = mapped_column()
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

@@ -12,11 +12,16 @@ from app.api.deps import ContainerDep, TenantDep
 from app.config import API_PREFIX
 from app.core.context import RunMode
 from app.core.enums import SessionStatus
-from app.core.errors import Conflict, NotFound, TooManyRequests
+from app.core.errors import Conflict, EngineError, NotFound, TooManyRequests
 from app.engine.guardrails.budgets import BudgetExceeded
 from app.engine.orchestrator import turn_input, valid_time_zone
 
 router = APIRouter(tags=["chat"])
+
+
+class AgentPaused(EngineError):
+    status_code = 503
+    code = "AGENT_PAUSED"
 
 # The app lets the rep type up to 100,000 characters; attached files add a short note naming them.
 MAX_MESSAGE_CHARS = 100_000
@@ -45,12 +50,15 @@ class ChatAccepted(BaseModel):
 @router.post("/chat", status_code=status.HTTP_202_ACCEPTED, response_model=ChatAccepted)
 async def chat(body: ChatRequest, tenant: TenantDep, container: ContainerDep) -> ChatAccepted:
     text = body.message.strip()
+    admin = container.admin
+    if admin is not None and not admin.agent_enabled:
+        raise AgentPaused(admin.maintenance_message or "The sales agent is paused by the RoleSync team. Try again later.")
     picked = None
     if body.skill:  # checked first: a skill that can't be used shouldn't cost the rep a turn
         skill = await container.skills.pickable(tenant.tenant_id, tenant.user_id, body.skill)
         picked = {"slug": skill.slug, "name": skill.name}
     # Per-tenant budgets, before anything starts: concurrency, then cost and rate.
-    limit = container.settings.max_concurrent_runs_per_tenant
+    limit = admin.limit("max_concurrent_runs_per_tenant") if admin is not None else container.settings.max_concurrent_runs_per_tenant
     if await container.sessions.count_running(tenant.tenant_id) >= limit:
         raise TooManyRequests(f"this workspace already has {limit} agent runs in progress; try again shortly")
     try:
@@ -74,6 +82,8 @@ async def chat(body: ChatRequest, tenant: TenantDep, container: ContainerDep) ->
         )
         if owned is None:
             raise NotFound("session not found")
+        if admin is not None:  # an administrator's stop ended the previous request, not this one
+            await admin.clear_stop(owned.id)
         claimed = await container.runner.continue_session(owned, graph_input, user_message=text)
         if claimed is None:
             raise Conflict("this session is still working or waiting for an approval")

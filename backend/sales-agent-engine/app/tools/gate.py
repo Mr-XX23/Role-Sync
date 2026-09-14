@@ -135,6 +135,10 @@ class ToolGate:
         if definition is None:
             return await self._refuse(ctx, agent_name, tool, raw_args, call_id, ToolOutcome.DENIED, f"unknown tool '{tool}'")
 
+        if not self._registry.is_enabled(tool):
+            message = f"'{tool}' is turned off by the RoleSync team right now"
+            return await self._refuse(ctx, agent_name, tool, raw_args, call_id, ToolOutcome.DENIED, message)
+
         if not self._scopes.allows(agent_name, definition):
             message = f"agent '{agent_name}' may not use '{tool}' (requires {definition.scope.value} scope)"
             return await self._refuse(ctx, agent_name, tool, raw_args, call_id, ToolOutcome.DENIED, message)

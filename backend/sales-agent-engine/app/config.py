@@ -164,6 +164,26 @@ class Settings(BaseSettings):
     # --- identity keys: auth-service JWKS, with the PEM as fallback --------
     jwt_jwks_url: str | None = Field(None, validation_alias=_env("SALES_AGENT_JWT_JWKS_URL"))
 
+    # --- Super Admin Console ------------------------------------------------
+    # auth-service's internal API decides who is a platform super admin (X-Internal-Token).
+    internal_service_token: SecretStr | None = Field(None, validation_alias=_env("INTERNAL_SERVICE_TOKEN"))
+    # Unset: the origin of SALES_AGENT_JWT_JWKS_URL (auth-service), else http://localhost:8082.
+    auth_service_url: str | None = Field(None, validation_alias=_env("SALES_AGENT_AUTH_SERVICE_URL"))
+    platform_access_cache_seconds: float = Field(30.0, validation_alias=_env("SALES_AGENT_PLATFORM_ACCESS_CACHE_SECONDS"))
+    # how often every instance re-reads the admin overrides (controls, tools, routes, rates, prompts)
+    admin_refresh_seconds: float = Field(5.0, validation_alias=_env("SALES_AGENT_ADMIN_REFRESH_SECONDS"))
+
+    def auth_service_base_url(self) -> str:
+        if self.auth_service_url:
+            return self.auth_service_url.rstrip("/")
+        if self.jwt_jwks_url:
+            from urllib.parse import urlsplit
+
+            parts = urlsplit(self.jwt_jwks_url)
+            if parts.scheme and parts.netloc:
+                return f"{parts.scheme}://{parts.netloc}"
+        return "http://localhost:8082"
+
     @staticmethod
     def split_list(value: str) -> tuple[str, ...]:
         return tuple(item.strip() for item in value.split(",") if item.strip())

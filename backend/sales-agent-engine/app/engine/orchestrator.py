@@ -162,6 +162,9 @@ Write in clear, professional, friendly language. Keep chat replies short unless 
 
 {time_context}"""
 
+# The built-in prompt without its clock line: what the Super Admin Console shows and adds to or replaces.
+BASE_PROMPT = SYSTEM_PROMPT.removesuffix("{time_context}").rstrip()
+
 WRAP_UP_NOTE = """This request stopped because an action didn't go through, and the rep has decided whether to undo
 the actions it had completed (see the undo_actions result). Take no further action in this request: briefly tell
 the rep what failed and what was undone or kept, then ask how they'd like to continue."""
@@ -238,6 +241,7 @@ class Orchestrator:
         budgets: TenantBudgets | None = None,
         context: ContextManager | None = None,
         skills: SkillService | None = None,
+        admin: Any = None,
     ) -> None:
         self._router = router
         self._gate = gate
@@ -250,6 +254,25 @@ class Orchestrator:
         self._budgets = budgets
         self._context = context
         self._skills = skills
+        # Super Admin Console overrides (``app.admin.runtime.AdminRuntime``): pause, stop, prompts.
+        self._admin = admin
+
+    def set_limits(self, limits: TurnLimits) -> None:
+        self._limits = limits
+
+    async def _admin_halt(self, ctx: AgentContext, *, consume: bool, include_pause: bool = True) -> Halt | None:
+        if self._admin is None:
+            return None
+        try:
+            return await self._admin.halt_for(ctx.session_id, consume=consume, include_pause=include_pause)
+        except Exception:
+            logger.warning("could not check admin stop for session %s", ctx.session_id, exc_info=True)
+            return None
+
+    def _prompt_body(self, agent_name: str, base: str) -> str:
+        if self._admin is None:
+            return base
+        return self._admin.prompt_body(agent_name, base)
 
     def graph_spec(self) -> GraphSpec:
         return GraphSpec(
@@ -274,6 +297,9 @@ class Orchestrator:
         halt = check_before_step(self._limits, steps_taken=steps_taken, tokens_used=tokens)
         if halt is not None:
             return _halted(halt, steps=steps_taken)
+        halt = await self._admin_halt(ctx, consume=True)
+        if halt is not None:
+            return _halted(halt, steps=steps_taken)
 
         picked = state.get("picked_skill")
         if picked and not state.get("picked_skill_loaded") and self._registry.get(SKILL_TOOL) is not None:
@@ -282,7 +308,7 @@ class Orchestrator:
         steps = steps_taken + 1
         wrap_up = bool(state.get("wrap_up"))
         await emit_best_effort(self._events, ctx.session_id, EventType.STEP_STARTED, {"step": "planning", "number": steps})
-        system = SYSTEM_PROMPT.format(time_context=_time_context(await self._time_zone(ctx, state)))
+        system = f"{self._prompt_body(AGENT_NAME, BASE_PROMPT)}\n\n{_time_context(await self._time_zone(ctx, state))}"
         if self._skills is not None and self._registry.get(SKILL_TOOL) is not None:
             index = await self._skills.index_text(ctx.tenant_id, ctx.user_id)
             if index:
@@ -353,6 +379,9 @@ class Orchestrator:
     async def act(self, state: dict[str, Any]) -> dict[str, Any]:
         ctx = current_context()
         pending = state["pending_calls"]
+        if await self._admin_halt(ctx, consume=False, include_pause=False) is not None:
+            # Stopped by an administrator: run nothing more; the next planning step ends the request.
+            return self._skip_stopped(state, pending)
         batch = self._next_batch(pending)
         outcomes = await asyncio.gather(*(self._run_call(ctx, call) for call in batch))
         running = {str(item["id"]): dict(item) for item in state.get("delegations") or []}
@@ -408,6 +437,19 @@ class Orchestrator:
                     "reason": f"{action} didn't go through: {detail}"[:500],
                 }
         return update
+
+    def _skip_stopped(self, state: dict[str, Any], pending: list[dict[str, Any]]) -> dict[str, Any]:
+        running = {str(item["id"]): dict(item) for item in state.get("delegations") or []}
+        messages: list[dict[str, Any]] = []
+        reason = "not run: an administrator stopped this request"
+        for call in pending:
+            reply = _skipped_reply(call, reason).to_dict()
+            owner = running.get(str(call.get("delegation") or ""))
+            if owner is None:
+                messages.append(reply)
+            else:
+                owner["messages"] = [*owner["messages"], reply]
+        return {"messages": messages, "pending_calls": [], "delegations": list(running.values())}
 
     async def compensate(self, state: dict[str, Any]) -> dict[str, Any]:
         """Offer to undo the request's completed actions. The arguments come from checkpointed
@@ -505,6 +547,8 @@ class Orchestrator:
         tokens = int(state.get("tokens") or 0)
 
         halt = check_before_step(self._limits, steps_taken=steps_taken, tokens_used=tokens)
+        if halt is None:
+            halt = await self._admin_halt(ctx, consume=True)
         if halt is not None:
             return self._stop_delegations(running, _halted(halt, steps=steps_taken), halt.message)
 
@@ -573,7 +617,7 @@ class Orchestrator:
         history = [Message.from_dict(item) for item in delegation.get("messages") or []]
         steps = int(delegation.get("steps") or 0) + 1
         last = steps >= agent.max_steps
-        system = f"{agent.prompt}\n\n{_time_context(await self._time_zone(ctx, state))}"
+        system = f"{self._prompt_body(agent.name, agent.prompt)}\n\n{_time_context(await self._time_zone(ctx, state))}"
         if self._context is not None:
             rep = await self._context.rep_context(ctx)
             if rep:

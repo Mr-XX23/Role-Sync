@@ -6,13 +6,16 @@ directly, so routing lives in one place and providers stay swappable.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Mapping, Sequence
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from app.models.providers.base import LLMProvider
 from app.models.types import (
     Complexity,
     Completion,
+    Message,
+    Role,
     ProviderError,
     ProviderUnavailable,
     StreamDone,
@@ -47,11 +50,61 @@ class RoutingRules:
         return (self.simple,)
 
 
+# Records a finished model call (usage metering). Best-effort: it must never fail the call.
+UsageMeter = Callable[[TaskSpec, Completion, int], Awaitable[None]]
+
+
 class ModelRouter:
-    def __init__(self, providers: Mapping[str, LLMProvider], rules: RoutingRules, tracer: TracingClient) -> None:
+    def __init__(
+        self,
+        providers: Mapping[str, LLMProvider],
+        rules: RoutingRules,
+        tracer: TracingClient,
+        meter: UsageMeter | None = None,
+    ) -> None:
         self._providers = dict(providers)
         self._rules = rules
         self._tracer = tracer
+        self._meter = meter
+
+    @property
+    def rules(self) -> RoutingRules:
+        return self._rules
+
+    def set_rules(self, rules: RoutingRules) -> None:
+        """Swap the routing rules (the Super Admin Console's route overrides); the next call uses them."""
+        self._rules = rules
+
+    def set_meter(self, meter: UsageMeter | None) -> None:
+        self._meter = meter
+
+    def configured_providers(self) -> frozenset[str]:
+        return frozenset(self._providers)
+
+    async def test_model(self, provider: str, model: str, prompt: str, *, max_output_tokens: int = 32) -> Completion:
+        """One short call to exactly this provider and model, bypassing the routes (admin model test)."""
+        if provider not in self._providers:
+            raise ProviderUnavailable(f"provider '{provider}' is not configured")
+        task = TaskSpec(
+            purpose="admin:model-test",
+            messages=(Message(role=Role.USER, content=prompt),),
+            complexity=Complexity.LOW,
+            max_output_tokens=max_output_tokens,
+        )
+        started = time.monotonic()
+        async for event in self._providers[provider].stream(task, (model,)):
+            if isinstance(event, StreamDone):
+                await self._record(task, event.completion, started)
+                return event.completion
+        raise ProviderError("model stream ended without a completion")
+
+    async def _record(self, task: TaskSpec, completion: Completion, started: float) -> None:
+        if self._meter is None:
+            return
+        try:
+            await self._meter(task, completion, int((time.monotonic() - started) * 1000))
+        except Exception:
+            logger.warning("could not record model usage for %s", task.purpose, exc_info=True)
 
     def can_serve(self, task: TaskSpec) -> bool:
         """Whether any configured provider could take this kind of task."""
@@ -72,6 +125,7 @@ class ModelRouter:
         for position, route in enumerate(routes):
             has_fallback = position + 1 < len(routes)
             emitted_text = False
+            started = time.monotonic()
             try:
                 async with self._tracer.span(
                     f"llm:{task.purpose}",
@@ -98,6 +152,7 @@ class ModelRouter:
                                     },
                                 }
                             )
+                            await self._record(task, event.completion, started)
                         yield event
                 return
             except ProviderError as exc:

@@ -29,6 +29,8 @@ class HaltReason(StrEnum):
     TOOL_CALL_LIMIT = "TOOL_CALL_LIMIT"
     TOKEN_LIMIT = "TOKEN_LIMIT"
     LOOP = "LOOP"
+    ADMIN_STOP = "ADMIN_STOP"  # a platform super admin stopped this request
+    PAUSED = "PAUSED"  # the agent is paused platform-wide
 
 
 @dataclass(frozen=True, slots=True)
