@@ -24,18 +24,25 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpStatus;
+import org.springframework.orm.jpa.EntityManagerHolder;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityManagerFactory;
 
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doReturn;
 
 /**
  * The ledger against a real database, with the same transactions production uses (the test's own
@@ -43,8 +50,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 @DataJpaTest
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
-@Import({CreditLedgerService.class, CreditAccountWriter.class, PricingService.class, UsageReportService.class,
-		CreditLedgerServiceTest.Config.class})
+@Import({CreditLedgerService.class, CreditAccountWriter.class, CreditAccountLocker.class, PricingService.class,
+		UsageReportService.class, CreditLedgerServiceTest.Config.class})
 class CreditLedgerServiceTest {
 
 	@TestConfiguration
@@ -82,6 +89,14 @@ class CreditLedgerServiceTest {
 	private WelcomeGrantRepository welcomeGrants;
 	@Autowired
 	private PaymentOrderRepository orders;
+	@Autowired
+	private CreditAccountWriter writer;
+	@Autowired
+	private EntityManagerFactory entityManagerFactory;
+	@MockitoSpyBean
+	private CreditAccountRepository accountsSpy;
+	@MockitoSpyBean
+	private WelcomeGrantRepository welcomeGrantsSpy;
 
 	@BeforeEach
 	void clean() {
@@ -109,6 +124,44 @@ class CreditLedgerServiceTest {
 		// A second workspace for the same person gets nothing: no farming by creating workspaces.
 		assertThat(ledger.ensureAccount(second, user).getBalanceMillicredits()).isZero();
 		assertThat(welcomeGrants.count()).isEqualTo(1);
+	}
+
+	@Test
+	void aRequestThatLosesTheFirstContactRaceGivesWayQuietly() {
+		UUID workspace = UUID.randomUUID();
+		UUID user = UUID.randomUUID();
+		ledger.ensureAccount(workspace, user); // the winner: account created, 500 granted
+
+		// The loser checked before the winner committed, so it believes both rows are still missing.
+		doReturn(false).when(accountsSpy).existsById(workspace);
+		doReturn(false).when(welcomeGrantsSpy).existsById(user);
+
+		writer.createIfMissing(workspace);
+		assertThat(writer.grantWelcomeIfDue(workspace, user)).isFalse();
+		assertThat(accounts.findById(workspace).orElseThrow().getBalanceMillicredits()).isEqualTo(500_000);
+		assertThat(welcomeGrants.count()).isEqualTo(1);
+	}
+
+	@Test
+	void aStaleAccountHeldByTheRequestNeverOverwritesAConcurrentCharge() {
+		UUID workspace = UUID.randomUUID();
+		UUID user = UUID.randomUUID();
+		// One persistence context for the whole "request", as open-in-view does.
+		EntityManager requestContext = entityManagerFactory.createEntityManager();
+		TransactionSynchronizationManager.bindResource(entityManagerFactory, new EntityManagerHolder(requestContext));
+		try {
+			writer.createIfMissing(workspace); // leaves the new account managed in the request's context
+
+			// Meanwhile another request charges the workspace.
+			CompletableFuture.runAsync(() -> ledger.recordUsage(agentTurn(workspace, null, "concurrent"))).join();
+
+			assertThat(writer.grantWelcomeIfDue(workspace, user)).isTrue();
+		}
+		finally {
+			TransactionSynchronizationManager.unbindResource(entityManagerFactory);
+			requestContext.close();
+		}
+		assertThat(accounts.findById(workspace).orElseThrow().getBalanceMillicredits()).isEqualTo(500_000 - 19_665);
 	}
 
 	@Test

@@ -14,8 +14,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -25,8 +26,10 @@ import java.util.UUID;
  * welcome credits — each in its own transaction.
  *
  * <p>Two requests for a brand-new workspace or user can arrive together. The database's unique
- * keys decide the winner; the loser's constraint error is caught here, in a transaction of its
- * own, so it can't poison the caller's transaction.
+ * keys decide the winner. The loser's constraint error is caught <em>outside</em> its transaction:
+ * caught inside, the transaction would already be marked rollback-only and its commit would fail
+ * with an unexpected-rollback error instead of quietly giving way. Running in a transaction of its
+ * own also keeps the error from poisoning the caller's transaction.
  */
 @Component
 public class CreditAccountWriter {
@@ -36,28 +39,34 @@ public class CreditAccountWriter {
 	private final CreditAccountRepository accounts;
 	private final CreditTransactionRepository transactions;
 	private final WelcomeGrantRepository welcomeGrants;
+	private final CreditAccountLocker locker;
 	private final BillingProperties properties;
+	private final TransactionTemplate ownTransaction;
 
 	public CreditAccountWriter(CreditAccountRepository accounts,
 	                           CreditTransactionRepository transactions,
 	                           WelcomeGrantRepository welcomeGrants,
-	                           BillingProperties properties) {
+	                           CreditAccountLocker locker,
+	                           BillingProperties properties,
+	                           PlatformTransactionManager transactionManager) {
 		this.accounts = accounts;
 		this.transactions = transactions;
 		this.welcomeGrants = welcomeGrants;
+		this.locker = locker;
 		this.properties = properties;
+		this.ownTransaction = new TransactionTemplate(transactionManager);
+		this.ownTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
 	}
 
-	@Transactional(propagation = Propagation.REQUIRES_NEW)
 	public void createIfMissing(UUID workspaceId) {
 		if (accounts.existsById(workspaceId)) {
 			return;
 		}
 		try {
-			accounts.saveAndFlush(CreditAccount.builder()
+			ownTransaction.executeWithoutResult(status -> accounts.saveAndFlush(CreditAccount.builder()
 					.workspaceId(workspaceId)
 					.status(CreditAccountStatus.ACTIVE)
-					.build());
+					.build()));
 		}
 		catch (DataIntegrityViolationException raced) {
 			log.debug("Credit account for {} was created concurrently", workspaceId);
@@ -69,36 +78,13 @@ public class CreditAccountWriter {
 	 *
 	 * @return true when this call granted them
 	 */
-	@Transactional(propagation = Propagation.REQUIRES_NEW)
 	public boolean grantWelcomeIfDue(UUID workspaceId, UUID userId) {
 		long grant = properties.getCredits().getSignupGrant();
 		if (userId == null || grant <= 0 || welcomeGrants.existsById(userId)) {
 			return false;
 		}
 		try {
-			long millicredits = CreditMath.wholeCreditsToMillicredits(grant);
-			welcomeGrants.saveAndFlush(WelcomeGrant.builder()
-					.userId(userId)
-					.workspaceId(workspaceId)
-					.millicredits(millicredits)
-					.build());
-
-			CreditAccount account = accounts.findForUpdate(workspaceId)
-					.orElseThrow(() -> new IllegalStateException("Credit account missing for " + workspaceId));
-			account.setBalanceMillicredits(account.getBalanceMillicredits() + millicredits);
-			account.setLifetimeCreditedMillicredits(account.getLifetimeCreditedMillicredits() + millicredits);
-			account.setLastActivityAt(Instant.now());
-			accounts.save(account);
-
-			transactions.save(CreditTransaction.builder()
-					.workspaceId(workspaceId)
-					.type(CreditTransactionType.WELCOME_GRANT)
-					.amountMillicredits(millicredits)
-					.balanceAfterMillicredits(account.getBalanceMillicredits())
-					.reason("Welcome credits")
-					.actorUserId(userId)
-					.idempotencyKey("welcome:" + userId)
-					.build());
+			ownTransaction.executeWithoutResult(status -> grantWelcome(workspaceId, userId, grant));
 			log.info("Granted {} welcome credits to workspace {} for user {}", grant, workspaceId, userId);
 			return true;
 		}
@@ -106,5 +92,30 @@ public class CreditAccountWriter {
 			// Another request granted this user first; the unique user id kept it to one grant.
 			return false;
 		}
+	}
+
+	private void grantWelcome(UUID workspaceId, UUID userId, long grant) {
+		long millicredits = CreditMath.wholeCreditsToMillicredits(grant);
+		welcomeGrants.saveAndFlush(WelcomeGrant.builder()
+				.userId(userId)
+				.workspaceId(workspaceId)
+				.millicredits(millicredits)
+				.build());
+
+		CreditAccount account = locker.lock(workspaceId);
+		account.setBalanceMillicredits(account.getBalanceMillicredits() + millicredits);
+		account.setLifetimeCreditedMillicredits(account.getLifetimeCreditedMillicredits() + millicredits);
+		account.setLastActivityAt(Instant.now());
+		accounts.save(account);
+
+		transactions.save(CreditTransaction.builder()
+				.workspaceId(workspaceId)
+				.type(CreditTransactionType.WELCOME_GRANT)
+				.amountMillicredits(millicredits)
+				.balanceAfterMillicredits(account.getBalanceMillicredits())
+				.reason("Welcome credits")
+				.actorUserId(userId)
+				.idempotencyKey("welcome:" + userId)
+				.build());
 	}
 }

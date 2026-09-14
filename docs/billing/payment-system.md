@@ -33,7 +33,11 @@ User returns to /billing/success?orderId=… and the page polls the order
 
 The browser redirect to `success_url` is treated as **cosmetic**. A user can open that URL
 directly, so it proves nothing. An order only becomes `SUCCEEDED` inside
-`PaymentFulfillmentService`, driven by a signature-verified webhook.
+`PaymentFulfillmentService`, driven by a signature-verified webhook — or, when that webhook is
+late or never arrives, by `OrderReconciler` asking Stripe's API for the Checkout Session with our
+own key: when the success page polls a pending order (at most every 5 s per order) and in a sweep
+every minute over the last 48 hours of pending orders. Both paths credit an order once. A
+restricted key needs **Checkout Sessions: Read** for the look-up.
 
 ---
 
@@ -177,7 +181,9 @@ Redis (`billing:pending_usage`) and retry for about six hours.
 
 ## Testing the flow locally
 
-Stripe cannot reach `localhost`, so forward its webhooks with the Stripe CLI:
+Stripe cannot reach `localhost`. Purchases still settle without webhooks (the look-up above, within
+a few seconds while the success page is open, otherwise within a minute), but refunds and disputes
+arrive only as webhooks, so forward them with the Stripe CLI:
 
 ```bash
 stripe listen --forward-to http://localhost:8080/api/v1/billing/webhooks/stripe

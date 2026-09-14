@@ -30,6 +30,9 @@ public interface PaymentOrderRepository extends JpaRepository<PaymentOrder, UUID
 
 	Page<PaymentOrder> findByStatusOrderByCreatedAtDesc(PaymentStatus status, Pageable pageable);
 
+	/** Recent orders in one status, oldest first: what the reconcile sweep looks up. */
+	List<PaymentOrder> findTop100ByStatusAndCreatedAtAfterOrderByCreatedAtAsc(PaymentStatus status, Instant createdAfter);
+
 	/** Rows of [currency, amountMinor, payments] for settled orders since {@code from}. */
 	@Query("""
 			select o.currency, coalesce(sum(o.amountMinor), 0), count(o)

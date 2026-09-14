@@ -67,6 +67,7 @@ public class CreditLedgerService {
 	private final UsageEventRepository usageEvents;
 	private final WelcomeGrantRepository welcomeGrants;
 	private final CreditAccountWriter writer;
+	private final CreditAccountLocker locker;
 	private final PricingService pricing;
 	private final WorkspaceMembershipGuard workspaceRoles;
 	private final BillingProperties properties;
@@ -76,6 +77,7 @@ public class CreditLedgerService {
 	                           UsageEventRepository usageEvents,
 	                           WelcomeGrantRepository welcomeGrants,
 	                           CreditAccountWriter writer,
+	                           CreditAccountLocker locker,
 	                           PricingService pricing,
 	                           WorkspaceMembershipGuard workspaceRoles,
 	                           BillingProperties properties) {
@@ -84,6 +86,7 @@ public class CreditLedgerService {
 		this.usageEvents = usageEvents;
 		this.welcomeGrants = welcomeGrants;
 		this.writer = writer;
+		this.locker = locker;
 		this.pricing = pricing;
 		this.workspaceRoles = workspaceRoles;
 		this.properties = properties;
@@ -385,8 +388,7 @@ public class CreditLedgerService {
 	}
 
 	private CreditAccount lock(UUID workspaceId) {
-		return accounts.findForUpdate(workspaceId)
-				.orElseThrow(() -> new IllegalStateException("Credit account missing for " + workspaceId));
+		return locker.lock(workspaceId);
 	}
 
 	public boolean isUsageRecorded(String idempotencyKey) {

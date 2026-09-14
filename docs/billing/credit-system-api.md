@@ -130,7 +130,9 @@ A paid event that arrives after the order was marked `FAILED`/`EXPIRED` still se
 
 ### `GET /api/v1/billing/orders/{orderId}` · `GET /api/v1/billing/orders`
 Order shape as above. Poll one order after returning from Stripe until `status` is `SUCCEEDED`
-(credits added) or `FAILED` / `EXPIRED`.
+(credits added) or `FAILED` / `EXPIRED`. Reading a `PENDING` order also asks Stripe for its Checkout
+Session (at most every 5 s per order), and a sweep does the same every minute, so a paid order settles
+even when the webhook never arrives.
 
 ---
 

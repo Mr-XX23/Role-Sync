@@ -4,6 +4,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.role_sync.billing.configurations.BillingProperties;
+import com.role_sync.billing.models.PaymentOrder;
 import com.role_sync.billing.models.PaymentProviderKey;
 import com.role_sync.billing.payments.CheckoutCommand;
 import com.role_sync.billing.payments.PaymentProvider;
@@ -20,6 +21,9 @@ import com.stripe.param.checkout.SessionCreateParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+
+import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Stripe gateway, implemented with Stripe Checkout.
@@ -40,6 +44,8 @@ public class StripePaymentProvider implements PaymentProvider {
 	static final String METADATA_ACCOUNT_ID = "account_id";
 	static final String METADATA_PACKAGE_CODE = "package_code";
 	static final String METADATA_CREDITS = "credits";
+	/** Event type recorded when an order is settled from a Checkout Session look-up instead of a webhook. */
+	static final String LOOKUP_EVENT = "checkout.session.lookup";
 
 	private final BillingProperties properties;
 
@@ -199,6 +205,42 @@ public class StripePaymentProvider implements PaymentProvider {
 					event.getId(), type, WebhookResultKind.IGNORED, providerRef, null, orderId,
 					0L, null, "unhandled event type");
 		};
+	}
+
+	@Override
+	public Optional<WebhookOutcome> lookupCheckout(PaymentOrder order) {
+		if (!isEnabled() || order.getProviderRef() == null || order.getProviderRef().isBlank()) {
+			return Optional.empty();
+		}
+		try {
+			Session session = Session.retrieve(order.getProviderRef(),
+					RequestOptions.builder().setApiKey(properties.getStripe().getSecretKey()).build());
+			return outcomeOf(session, order.getId());
+		}
+		catch (StripeException ex) {
+			// A restricted key needs "Checkout Sessions: Read" for this; the webhook still settles the order.
+			log.warn("Could not look up Stripe checkout {} for order {}: {}", order.getProviderRef(), order.getId(), ex.getMessage());
+			return Optional.empty();
+		}
+	}
+
+	/** What a retrieved Checkout Session says about its order: paid, expired, or nothing yet. */
+	static Optional<WebhookOutcome> outcomeOf(Session session, UUID orderId) {
+		long amount = session.getAmountTotal() == null ? 0L : session.getAmountTotal();
+		// One audit event per session and result, so repeated look-ups are recorded once and a
+		// webhook arriving later, with its own event id, finds the order already settled.
+		String eventId = "lookup:" + session.getId() + ":";
+		if ("paid".equals(session.getPaymentStatus())) {
+			return Optional.of(new WebhookOutcome(eventId + "paid", LOOKUP_EVENT, WebhookResultKind.PAID,
+					session.getId(), session.getPaymentIntent(), orderId.toString(), amount, session.getCurrency(),
+					"checkout session paid (confirmed with the Stripe API)"));
+		}
+		if ("expired".equals(session.getStatus())) {
+			return Optional.of(new WebhookOutcome(eventId + "expired", LOOKUP_EVENT, WebhookResultKind.EXPIRED,
+					session.getId(), session.getPaymentIntent(), orderId.toString(), amount, session.getCurrency(),
+					"checkout session expired (confirmed with the Stripe API)"));
+		}
+		return Optional.empty();
 	}
 
 	private static JsonObject child(JsonObject node, String field) {

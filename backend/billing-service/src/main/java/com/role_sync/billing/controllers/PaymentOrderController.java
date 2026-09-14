@@ -5,6 +5,7 @@ import com.role_sync.billing.models.PaymentOrder;
 import com.role_sync.billing.repository.PaymentOrderRepository;
 import com.role_sync.billing.security.WorkspaceMembershipGuard;
 import com.role_sync.billing.services.BillingException;
+import com.role_sync.billing.services.OrderReconciler;
 import com.role_sync.billing.utils.CallerIdentity;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -21,7 +22,8 @@ import java.util.UUID;
 
 /**
  * Purchase history and order status. The success page polls one order after the buyer returns
- * from Stripe, because the redirect proves nothing; only the webhook settles an order.
+ * from Stripe. The redirect itself proves nothing: a pending order is settled by the webhook, or by
+ * {@link OrderReconciler} asking Stripe directly when the webhook hasn't arrived.
  */
 @RestController
 @RequestMapping("/api/v1/billing")
@@ -29,10 +31,13 @@ public class PaymentOrderController {
 
 	private final PaymentOrderRepository orders;
 	private final WorkspaceMembershipGuard membership;
+	private final OrderReconciler reconciler;
 
-	public PaymentOrderController(PaymentOrderRepository orders, WorkspaceMembershipGuard membership) {
+	public PaymentOrderController(PaymentOrderRepository orders, WorkspaceMembershipGuard membership,
+	                              OrderReconciler reconciler) {
 		this.orders = orders;
 		this.membership = membership;
+		this.reconciler = reconciler;
 	}
 
 	@GetMapping("/orders/{orderId}")
@@ -52,7 +57,7 @@ public class PaymentOrderController {
 		catch (BillingException notMember) {
 			throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
 		}
-		return ResponseEntity.ok(PaymentOrderResponse.from(order));
+		return ResponseEntity.ok(PaymentOrderResponse.from(reconciler.refresh(order)));
 	}
 
 	@GetMapping("/orders")
