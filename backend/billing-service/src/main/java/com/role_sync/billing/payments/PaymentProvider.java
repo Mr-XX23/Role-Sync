@@ -1,6 +1,9 @@
 package com.role_sync.billing.payments;
 
+import com.role_sync.billing.models.PaymentOrder;
 import com.role_sync.billing.models.PaymentProviderKey;
+
+import java.util.Optional;
 
 /**
  * A payment gateway.
@@ -28,4 +31,15 @@ public interface PaymentProvider {
 	 * @throws PaymentProviderException when the signature cannot be verified
 	 */
 	WebhookOutcome parseWebhook(String rawBody, String signatureHeader);
+
+	/**
+	 * Asks the provider directly what became of an order's checkout, for when the webhook is late or
+	 * never arrives (a local stack the provider cannot reach, a failed delivery). The answer comes
+	 * from the provider's API under our own credentials, so it is as trustworthy as a signed webhook.
+	 *
+	 * @return the settled outcome, or empty while the buyer hasn't finished or the provider can't be asked
+	 */
+	default Optional<WebhookOutcome> lookupCheckout(PaymentOrder order) {
+		return Optional.empty();
+	}
 }
