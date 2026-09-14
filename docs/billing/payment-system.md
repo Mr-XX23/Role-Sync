@@ -4,8 +4,9 @@ New microservice: `backend/billing-service`. Spring Boot 4.1 / Java 25, own data
 (`rolesync-micro-billing`), port **8085**, registered with Eureka, routed by the gateway at
 `/api/v1/billing/**`.
 
-This is the **payment** half of the billing system. The **credit** half (ledger, balances,
-preflight/hold/settle) is the next slice — see
+This is the **payment** half of the billing system. The **credit** half (workspace balances,
+the ledger, metering, admin operations) lives in the same service — its API contract is
+[credit-system-api.md](credit-system-api.md) and the economics behind the prices are in
 [cost-model-and-credit-system.md](cost-model-and-credit-system.md).
 
 ---
@@ -23,9 +24,9 @@ User pays on Stripe hosted page      (card data never touches our servers)
         ↓
 Stripe → POST /api/v1/billing/webhooks/stripe   (HMAC-signed)
         ↓
-PaymentOrder → SUCCEEDED  +  CreditGrant row (PENDING)
+PaymentOrder → SUCCEEDED  +  credits added to the workspace balance (once per order)
         ↓
-[next slice] credit ledger drains PENDING grants → balance
+User returns to /billing/success?orderId=… and the page polls the order
 ```
 
 ### Why fulfilment is webhook-driven
@@ -54,9 +55,13 @@ Identity comes from the gateway-injected `X-User-Id`; workspace from `X-Tenant-I
 
 ```json
 POST /api/v1/billing/checkout
-Idempotency-Key: <optional, recommended>
-{ "packageCode": "STARTER", "provider": "STRIPE" }
+X-Tenant-Id: <workspace id>
+{ "packageCode": "STARTER", "idempotencyKey": "<optional, recommended>" }
 ```
+
+Browsers send the idempotency key in the body: the gateway's CORS allow-list has no
+`Idempotency-Key` header. Only members of the workspace may buy for it (403 otherwise), and a
+workspace whose credits a super admin suspended gets 409 `CREDITS_SUSPENDED`.
 
 ---
 
@@ -66,7 +71,11 @@ Idempotency-Key: <optional, recommended>
 |---|---|
 | `payment_orders` | One purchase attempt. Snapshots credits + `amount_minor` at checkout, so a later price change never rewrites history. Unique on `idempotency_key`. |
 | `payment_events` | Every verified webhook. **Unique on (provider, provider_event_id)** — this is the replay guard. Raw payloads are deliberately not stored (they carry customer contact details). |
-| `credit_grants` | The money→credits seam. **Unique on `order_id`**, so a replayed webhook cannot grant twice. The credit ledger will consume `PENDING` rows. |
+| `credit_grants` | Audit row per settled order (`APPLIED`), **unique on `order_id`**. |
+| `credit_accounts` | One balance per workspace, in millicredits; every change locks this row. |
+| `credit_transactions` | Append-only ledger: purchases, refunds, welcome and admin grants, deductions, usage, suspensions, each with the balance after it. Purchases and refunds are keyed by order id, so a replayed webhook cannot add or remove credits twice. |
+| `usage_events` | What each metered operation used (tokens, units, provider cost) and what it cost in credits. |
+| `welcome_grants` | One row per user who received the sign-up credits. |
 
 Money is always a `BIGINT` in the currency's **minor unit** (cents/paisa). Never a float.
 
@@ -86,13 +95,13 @@ Money is always a `BIGINT` in the currency's **minor unit** (cents/paisa). Never
 - **Port 8085 is not published.** The service trusts `X-User-Id` only because the gateway
   verifies the RS256 cookie, strips client-supplied identity headers, and is the only route in.
 
-### Known gaps (deliberate, for the next slice)
+- **Refunds and chargebacks.** A full `charge.refunded` removes the order's credits (the
+  balance may go negative); a partial refund is recorded for a super admin to settle.
+  `charge.dispute.created` suspends the workspace's credits until an admin reactivates it.
+  The full event table is in [credit-system-api.md](credit-system-api.md).
 
-- **No workspace-membership check yet.** Order reads are scoped to `accountId` **and**
-  `userId`, so no cross-workspace leak, but billing does not yet ask workspace-service
-  whether the caller may buy for that workspace. Add this with the ledger.
-- **Refund does not claw back credits.** `charge.refunded` moves the order to `REFUNDED` and
-  logs a warning; reversing spent credits is a ledger decision, not a payment one.
+### Known gaps
+
 - No invoices/receipts yet. No subscriptions — this is one-off credit top-ups only.
 
 ---
@@ -114,16 +123,20 @@ BILLING_SERVER_HOSTNAME=billing-service
 JDBC_BILLING_DATABASE_URL=jdbc:postgresql://postgres:5432/rolesync-micro-billing
 STRIPE_SECRET_KEY=sk_test_your_key_here
 STRIPE_WEBHOOK_SECRET=whsec_your_secret_here
-BILLING_SUCCESS_URL=http://localhost:5173/billing/success
-BILLING_CANCEL_URL=http://localhost:5173/billing/cancel
 ```
+
+`BILLING_SUCCESS_URL` / `BILLING_CANCEL_URL` are optional: they default to
+`${FRONTEND_URL}/billing/success` and `${FRONTEND_URL}/pricing?checkout=cancelled`.
+`INTERNAL_SERVICE_TOKEN` (already in `.env`) must be set: sales-agent-engine and data-pipeline
+authenticate to billing-service with it, and billing-service refuses internal calls without it.
 
 **Also required** — `.env` already sets `GATEWAY_PUBLIC_PATHS`, and an env value overrides the
-default in `gateway-service.properties`, so the webhook path must be added there or every
-Stripe callback is rejected with 401:
+default in `gateway-service.properties`, so the billing paths must be added there. Without the
+webhook path every Stripe callback is rejected with 401; without the public path the pricing
+page cannot load its packs for signed-out visitors:
 
 ```
-GATEWAY_PUBLIC_PATHS=/api/v1/auth/,/api/v1/webhooks/,/api/v1/billing/webhooks/
+GATEWAY_PUBLIC_PATHS=/api/v1/auth/,/api/v1/webhooks/,/api/v1/billing/webhooks/,/api/v1/billing/public/
 ```
 
 ### 3. Create the database
@@ -144,11 +157,21 @@ Append the block from [docker-compose.billing.yml](docker-compose.billing.yml) t
 docker compose up -d --build billing-service
 ```
 
-### 5. Restart the gateway and config server so they pick up the new route/config
+### 5. Recreate the services that changed
+
+Config first (the others read it at startup), then the rest. `restart` does not re-read `.env`,
+so recreate:
 
 ```bash
-docker compose restart config-service gateway-service
+docker compose up -d --no-deps --force-recreate config-service
+docker compose up -d --no-deps --build billing-service sales-agent-engine
+docker compose up -d --no-deps --force-recreate gateway-service data-pipeline
 ```
+
+The gateway answers 503 for a freshly started service for about a minute while Eureka catches
+up. Until sales-agent-engine and data-pipeline run this code, nothing is charged; set
+`BILLING_ENABLED=false` for them if billing-service is not deployed, or their charges queue in
+Redis (`billing:pending_usage`) and retry for about six hours.
 
 ---
 
@@ -162,12 +185,12 @@ stripe listen --forward-to http://localhost:8080/api/v1/billing/webhooks/stripe
 
 That prints a `whsec_...` — put it in `STRIPE_WEBHOOK_SECRET` and restart billing-service.
 
-Then start a checkout, open the returned `checkoutUrl`, and pay with Stripe's documented test
-card `4242 4242 4242 4242`, any future expiry, any CVC. Watch the order flip to `SUCCEEDED`
-and a `credit_grants` row appear.
+Then open `/pricing` signed in, buy a pack, and pay with Stripe's documented test card
+`4242 4242 4242 4242`, any future expiry, any CVC. The success page shows "Payment received"
+once the order is `SUCCEEDED`, and the top-bar balance rises by the pack's credits.
 
-Replay-safety is worth checking too — `stripe events resend <event_id>` should leave exactly
-one grant row.
+Replay-safety is worth checking too — `stripe events resend <event_id>` should leave the
+balance unchanged.
 
 ---
 
