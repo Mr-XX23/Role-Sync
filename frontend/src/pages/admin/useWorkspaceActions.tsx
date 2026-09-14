@@ -5,7 +5,8 @@ import { useToast } from '../../context/ToastContext';
 import { ConfirmAction } from './components/AdminUi';
 
 type Pending =
-  | { kind: 'suspend' | 'reactivate'; workspace: AdminWorkspace }
+  | { kind: 'suspend'; workspace: AdminWorkspace }
+  | { kind: 'reactivate'; workspace: AdminWorkspace }
   | { kind: 'plan'; workspace: AdminWorkspace; plan: AdminPlan | null; defaultPlan: AdminPlan | undefined };
 
 /** Suspend / reactivate a workspace or change its plan, with a confirmation first. */

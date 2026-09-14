@@ -8,6 +8,15 @@ import Register from './pages/auth/Register';
 import VerifyPhone from './pages/auth/VerifyPhone';
 import VerifyEmail from './pages/auth/VerifyEmail';
 import { DashboardLayout } from './components/layout/DashboardLayout';
+import { AdminLayout } from './components/layout/AdminLayout';
+import { SuperAdminRoute } from './components/guards/SuperAdminRoute';
+import { AdminOverview } from './pages/admin/AdminOverview';
+import { AdminUsers } from './pages/admin/AdminUsers';
+import { AdminWorkspaces } from './pages/admin/AdminWorkspaces';
+import { AdminAgents } from './pages/admin/AdminAgents';
+import { AdminModels } from './pages/admin/AdminModels';
+import { AdminPrompts } from './pages/admin/AdminPrompts';
+import { AdminSupportTickets } from './pages/admin/AdminSupportTickets';
 import { ProtectedRoute } from './components/guards/ProtectedRoute';
 import { RegistrationFlowGuard } from './components/guards/RegistrationFlowGuard';
 import { GuestRoute } from './components/guards/GuestRoute';
@@ -181,6 +190,56 @@ export const router = createBrowserRouter([
       {
         path: 'support',
         element: <Support />,
+      },
+    ],
+  },
+  // The Super Admin Console: platform super admins only (every console API checks that on the server too).
+  {
+    path: '/admin',
+    element: (
+      <ProtectedRoute>
+        <SuperAdminRoute>
+          <AdminLayout />
+        </SuperAdminRoute>
+      </ProtectedRoute>
+    ),
+    children: [
+      {
+        path: '',
+        element: <Navigate to="overview" replace />,
+      },
+      {
+        path: 'overview',
+        element: <AdminOverview />,
+      },
+      {
+        path: 'users',
+        element: <AdminUsers />,
+      },
+      {
+        path: 'workspaces',
+        element: <AdminWorkspaces />,
+      },
+      {
+        path: 'support',
+        element: <AdminSupportTickets />,
+      },
+      {
+        path: 'agents',
+        element: <AdminAgents />,
+      },
+      {
+        path: 'models',
+        element: <AdminModels />,
+      },
+      {
+        path: 'prompts',
+        element: <AdminPrompts />,
+      },
+      // Usage, Plans and Audit Log are in the nav but have no page yet.
+      {
+        path: '*',
+        element: <Navigate to="/admin/overview" replace />,
       },
     ],
   },

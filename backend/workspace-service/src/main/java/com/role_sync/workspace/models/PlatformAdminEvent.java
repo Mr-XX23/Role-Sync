@@ -11,9 +11,9 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 /**
- * One change a platform super admin made through the admin console (plans, workspace plans and
- * suspensions). Written in the same transaction as the change; labels are copied in so the trail
- * still reads correctly after renames.
+ * One change a platform super admin made through the admin console (plans, workspace plans,
+ * suspensions and support tickets). Written in the same transaction as the change; labels are
+ * copied in so the trail still reads correctly after renames.
  */
 @Entity
 @Table(name = "platform_admin_events", indexes = {
@@ -34,9 +34,12 @@ public class PlatformAdminEvent {
     public static final String PLAN_MADE_DEFAULT = "PLAN_MADE_DEFAULT";
     public static final String PLAN_ARCHIVED = "PLAN_ARCHIVED";
     public static final String PLAN_RESTORED = "PLAN_RESTORED";
+    public static final String SUPPORT_TICKET_REPLIED = "SUPPORT_TICKET_REPLIED";
+    public static final String SUPPORT_TICKET_STATUS_CHANGED = "SUPPORT_TICKET_STATUS_CHANGED";
 
     public static final String TARGET_WORKSPACE = "workspace";
     public static final String TARGET_PLAN = "plan";
+    public static final String TARGET_SUPPORT_TICKET = "support_ticket";
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)

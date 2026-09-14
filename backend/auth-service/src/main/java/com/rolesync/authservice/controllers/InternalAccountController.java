@@ -4,12 +4,15 @@ import com.rolesync.authservice.dto.internal.AccountEmailRequest;
 import com.rolesync.authservice.dto.internal.AccountLookupRequest;
 import com.rolesync.authservice.dto.internal.AccountSummary;
 import com.rolesync.authservice.dto.internal.EmailOutcome;
+import com.rolesync.authservice.dto.internal.PlatformAccess;
 import com.rolesync.authservice.dto.internal.ProvisionAccountRequest;
+import com.rolesync.authservice.services.admin.PlatformAdminGuard;
 import com.rolesync.authservice.services.user.AccountProvisioningService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -30,6 +33,7 @@ import java.util.UUID;
 public class InternalAccountController {
 
     private final AccountProvisioningService provisioningService;
+    private final PlatformAdminGuard platformAdminGuard;
 
     /** Finds the account for an email, or creates a verified one for it. */
     @PostMapping("/provision")
@@ -51,6 +55,15 @@ public class InternalAccountController {
     public ResponseEntity<EmailOutcome> sendWorkspaceAccessEmail(@PathVariable UUID authUserId,
                                                                  @Valid @RequestBody AccountEmailRequest request) {
         return ResponseEntity.ok(provisioningService.sendWorkspaceAccessEmail(authUserId, request));
+    }
+
+    /**
+     * Whether an account is a platform super admin, for the Super Admin Console guards of other
+     * services (workspace-service's support ticket console). An unknown account is simply not one.
+     */
+    @GetMapping("/{authUserId}/platform-access")
+    public ResponseEntity<PlatformAccess> platformAccess(@PathVariable UUID authUserId) {
+        return ResponseEntity.ok(platformAdminGuard.accessFor(authUserId));
     }
 
     /** Sign-in details (email, status, last sign-in, pending temporary password) for many accounts. */
