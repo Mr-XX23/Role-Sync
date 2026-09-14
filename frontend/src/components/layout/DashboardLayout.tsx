@@ -3,8 +3,8 @@ import { Outlet, useLocation } from 'react-router-dom';
 import {
   Library,
   Cable,
-  Bot,
-  FolderKanban,
+  // Bot, // hidden for now (Agent Manager)
+  // FolderKanban, // hidden for now (Workspace)
   LifeBuoy,
   Plus,
   Settings as SettingsIcon,
@@ -80,18 +80,19 @@ export const DashboardLayout: React.FC = () => {
               icon: Cable,
               path: '/salesman/external-connector',
             },
-            {
-              id: 'ai-tasks',
-              label: 'Agent Manager',
-              icon: Bot,
-              path: '/salesman/ai-tasks',
-            },
-            {
-              id: 'workspace',
-              label: 'Workspace',
-              icon: FolderKanban,
-              path: '/salesman/workspace',
-            },
+            // Hidden for now: Agent Manager and Workspace nav items.
+            // {
+            //   id: 'ai-tasks',
+            //   label: 'Agent Manager',
+            //   icon: Bot,
+            //   path: '/salesman/ai-tasks',
+            // },
+            // {
+            //   id: 'workspace',
+            //   label: 'Workspace',
+            //   icon: FolderKanban,
+            //   path: '/salesman/workspace',
+            // },
             // Only workspace owners and admins manage people.
             ...(canManageUsers
               ? [
