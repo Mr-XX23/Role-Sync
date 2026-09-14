@@ -31,6 +31,9 @@ class ChatRequest(BaseModel):
     time_zone: str | None = Field(
         default=None, max_length=64, description="The rep's IANA time zone (e.g. 'Europe/Berlin'), for dates and meetings"
     )
+    skill: str | None = Field(
+        default=None, max_length=100, description="The ref of a skill the rep picked for this request (from GET /skills)"
+    )
 
 
 class ChatAccepted(BaseModel):
@@ -42,6 +45,10 @@ class ChatAccepted(BaseModel):
 @router.post("/chat", status_code=status.HTTP_202_ACCEPTED, response_model=ChatAccepted)
 async def chat(body: ChatRequest, tenant: TenantDep, container: ContainerDep) -> ChatAccepted:
     text = body.message.strip()
+    picked = None
+    if body.skill:  # checked first: a skill that can't be used shouldn't cost the rep a turn
+        skill = await container.skills.pickable(tenant.tenant_id, tenant.user_id, body.skill)
+        picked = {"slug": skill.slug, "name": skill.name}
     # Per-tenant budgets, before anything starts: concurrency, then cost and rate.
     limit = container.settings.max_concurrent_runs_per_tenant
     if await container.sessions.count_running(tenant.tenant_id) >= limit:
@@ -51,7 +58,7 @@ async def chat(body: ChatRequest, tenant: TenantDep, container: ContainerDep) ->
     except BudgetExceeded as exc:
         raise TooManyRequests(str(exc)) from exc
 
-    graph_input = turn_input(text, time_zone=valid_time_zone(body.time_zone))
+    graph_input = turn_input(text, time_zone=valid_time_zone(body.time_zone), skill=picked)
     if body.session_id is None:
         session = await container.runner.start_new(
             tenant_id=tenant.tenant_id,

@@ -101,6 +101,8 @@ class Settings(BaseSettings):
     memory_facts_per_key: int = Field(100, validation_alias=_env("SALES_AGENT_MEMORY_FACTS_PER_KEY"))
     memory_versions_kept: int = Field(20, validation_alias=_env("SALES_AGENT_MEMORY_VERSIONS_KEPT"))
     profile_cache_seconds: int = Field(300, validation_alias=_env("SALES_AGENT_PROFILE_CACHE_SECONDS"))
+    # skills drafted with AI from a one-line idea, per rep per UTC day (each is one model call)
+    skill_drafts_per_day: int = Field(20, validation_alias=_env("SALES_AGENT_SKILL_DRAFTS_PER_DAY"))
 
     # --- event stream (SSE) ----------------------------------------------
     event_stream_maxlen: int = Field(5_000, validation_alias=_env("SALES_AGENT_EVENT_STREAM_MAXLEN"))

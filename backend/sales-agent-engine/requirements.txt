@@ -7,6 +7,8 @@ httpx==0.28.1
 # Settings / validation
 pydantic==2.13.5
 pydantic-settings==2.15.0
+# SKILL.md front matter (already installed with langgraph's dependencies; pinned because skills use it directly)
+PyYAML==6.0.3
 
 # Persistence (schema `agent`)
 sqlalchemy[asyncio]==2.0.52

@@ -17,13 +17,16 @@ approval before any real-world action.
 | 3 | Write tools (calendar, Slack, Notion, documents + quotes saved to Drive or the knowledge base, catalog + stock) and guardrails (turn limits + loop detection, retry/timeout, circuit breaker, undo with approval, approval TTL, per-workspace budgets) | done |
 | 4 | Context manager (prompt budget, summaries, offloaded results), versioned memory with optimistic locking (rep, customer, deal, conversation), deals in workspace-service, "what the agent remembers" review | done |
 | 5 | Sub-agents: research, outreach and quote, handed work with `delegate`, each scoped at the gate, result-only back to the planner | done |
+| — | Skills: playbooks the agent follows (10 built in, workspace and private skills, per-rep switches, versions, SKILL.md import/export, AI drafts, usage), loaded with `use_skill`, picked in chat or handed to sub-agents | done |
 | 6 | Autonomy layer | next |
 
 ## Layout
 
 ```
 app/
-  api/            chat, sessions, SSE stream, approvals, memory, health + identity dependencies
+  api/            chat, sessions, SSE stream, approvals, memory, skills, health + identity dependencies
+  skills/         builtin/*.md (the shipped playbooks), service.py (who sees, changes and uses which skill,
+                  what the agent is told), store.py (skills, versions, switches, usage), skillmd.py (SKILL.md)
   engine/         orchestrator (plan → act → compensate graph, and a step for each running sub-agent),
                   delegation (sub-agents: what each is for, its prompt and what its result carries),
                   runner (start / pause / resume / recovery /
@@ -83,6 +86,10 @@ outcome is unknown (timeout, dropped connection) is reported as UNKNOWN and neve
 | `record_stock_movement` | write: received, sold, shipped, damaged, lost or returned stock, checked against available units first; only a shipment can be undone (shipped back once) | data-pipeline inventory movements |
 | `correct_stock_count` | write: replace a count with a note; workspace owners and admins only, refused before approval for anyone else; undo restores the count unless stock moved since | data-pipeline inventory movements |
 | `reserve_stock`, `release_stock` | write; undo releases the reservation (a release can't be undone) | data-pipeline inventory |
+| `add_web_page_to_knowledge_base` | write (coordinator only): a public page, checked for an internal address before approval; the same address again refreshes it, keeping its name and category; undo deletes a page it added (after waiting for processing to finish) | data-pipeline knowledge vault (`ingest-url`, public addresses only) |
+| `update_knowledge_document`, `reclassify_knowledge_document` | write (coordinator only): correct the category, competitor, industry, summary or tags, or have the classifier decide again; undo restores the previous values | data-pipeline knowledge vault |
+| `reindex_knowledge_document` | write (coordinator only): rebuild the search index from the stored content; nothing to undo | data-pipeline knowledge vault |
+| `delete_knowledge_document` | write (coordinator only): only the rep's own documents unless they are an owner or admin, checked before approval; undo adds a web page back from its address, a file can't be restored | data-pipeline knowledge vault |
 | `create_deal` | write (approval); warns about an open deal for the same customer; undo deletes it unless it changed | workspace-service deals |
 | `update_deal` | write (approval): only the fields it names; re-applies over a concurrent edit; undo restores only fields nobody touched since | workspace-service deals |
 | `remember`, `forget` | memory: saved and deleted without approval, audited; shared memory is closed to viewers | engine `agent.memory` |
@@ -92,6 +99,7 @@ outcome is unknown (timeout, dropped connection) is reported as UNKNOWN and neve
 | `search_slack_messages` | read | Composio Slack |
 | `search_notion`, `read_notion_page` | read | Composio Notion |
 | `search_knowledge_base`, `read_knowledge_document` | read | data-pipeline knowledge vault: semantic search, with keyword retrieval in the adapter when it is unavailable |
+| `list_knowledge_documents` | read: every document in any state, with why one isn't searchable and whether the rep added it | data-pipeline knowledge vault |
 | `stock_history` | read: movements newest first, with totals per location | data-pipeline inventory movements |
 | `search_catalog`, `check_inventory` | read | data-pipeline catalog |
 | `web_search` | read | Tavily pages + Google Search grounding (Gemini) |
@@ -103,8 +111,9 @@ outcome is unknown (timeout, dropped connection) is reported as UNKNOWN and neve
 
 Connector tools are denied (not failed) when the user hasn't connected that app. Results carry
 `sources` (web pages, message and page links, or links to what a write created), which the chat UI
-shows under each step. Catalog writes and stock reservations are denied to workspace viewers. Every
-executed write's result includes an `action_id`, which `undo_actions` takes.
+shows under each step. Catalog, stock and knowledge-base writes are denied to workspace viewers, and
+knowledge-base writes need the KNOWLEDGE scope, which no sub-agent has. Every executed write's result
+includes an `action_id`, which `undo_actions` takes.
 
 ## Guardrails
 
@@ -139,6 +148,24 @@ comes back to the planner — never its steps.
   pause runs on its own.
 - A sub-agent gets `max_steps` model steps (6) and is told to answer with what it has on its last one;
   the turn's own limits (steps, tool calls, tokens, loop detection) cover everything on top of that.
+- `delegate` can hand over a **skill** with the task: the sub-agent loads it (a `use_skill` call under its
+  own name) before its first step.
+
+## Skills
+
+A skill is a playbook for one recurring sales job: the steps, what to check, and what a good result looks
+like. Skills guide the agent; they never add tools or skip approvals.
+
+| Piece | Where | Behaviour |
+|---|---|---|
+| Built-in skills | `skills/builtin/*.md` | Ten SKILL.md files ship with the code (prospect research, lead qualification, outreach sequence, discovery prep, meeting follow-up, objection handling, competitive positioning, quote and proposal, negotiation plan, pipeline review), on for everyone. A test checks they name only real tools. An owner or admin can customize one for the workspace (a `builtin_key` row) and reset it. |
+| Who writes | `skills/service.py` | Owners and admins write workspace skills; members and above write private skills that only their own agent uses; viewers read. Private skills are invisible to everyone else, admins included. Limits: 40 workspace, 20 private per rep, 12,000-character instructions. |
+| Switches | `agent.skill_setting` | Every skill is on until switched off. A rep switches skills for their own agent; an owner or admin can switch a built-in or workspace skill off for everyone. At most 30 on per rep. |
+| What the agent sees | `engine/orchestrator.py` | Each planning step lists the rep's switched-on skills (id, name, when to use it). The model loads one with `use_skill` (a read: no approval, audited) and follows it. A skill the rep picked for a request (`POST /chat` `skill`) is loaded before the model's first step, as the same `use_skill` call. |
+| Versions | `agent.skill_version` | Every save is a new version, written only if the skill is still at the version the editor loaded (409 otherwise). Any version can be restored as the newest. Archiving and resetting keep everything; archived skills can be restored. |
+| SKILL.md | `skills/skillmd.py` | Export downloads the Anthropic Agent Skills format; import previews a file first (only its instructions come in, tools this agent doesn't have are dropped with a warning). |
+| AI drafts | `POST /skills/draft` | One sentence becomes an editable SKILL.md draft (one model call, `SALES_AGENT_SKILL_DRAFTS_PER_DAY` per rep). Nothing is saved until the rep saves it. |
+| Usage | `agent.skill_usage` | Each load is counted as chosen by the agent, picked by the rep, or handed to a sub-agent. |
 
 ## Context and memory
 
@@ -173,7 +200,7 @@ here until it expires (up to 60 min), because revocation lives only inside auth-
 
 | Method | Path | |
 |---|---|---|
-| POST | `/chat` | `{"message", "session_id"?, "time_zone"?}` → 202 `{session_id, status, events_url}` (429 over a workspace budget) |
+| POST | `/chat` | `{"message", "session_id"?, "time_zone"?, "skill"?}` → 202 `{session_id, status, events_url}` (429 over a workspace budget; `skill` is a skill ref the rep picked) |
 | GET | `/sessions` | the caller's sessions in the workspace |
 | GET | `/sessions/{id}` | transcript, open approvals, and `last_event_id` to subscribe after |
 | GET | `/sessions/{id}/events` | SSE: `{type, session_id, data, ts}` envelopes; resume with `Last-Event-ID` or `?last_event_id=` |
@@ -182,6 +209,11 @@ here until it expires (up to 60 min), because revocation lives only inside auth-
 | GET | `/memory/rep` | what the agent remembers about the caller; private to them |
 | GET | `/memory/accounts`, `/memory/account?company=`, `/memory/deals/{id}` | customer knowledge shared by the workspace |
 | DELETE | `/memory/rep/facts/{id}`, `/memory/accounts/{key}/facts/{id}`, `/memory/deals/{id}/facts/{id}` | forget one fact (shared memory: every member except viewers) |
+| GET | `/skills`, `/skills/{ref}`, `/skills/tools`, `/skills/archived` | the skills the caller can see with their switches and usage; one with its instructions; tools a skill may name; archived skills they can restore |
+| POST | `/skills`, `/skills/import/preview`, `/skills/draft` | create (`visibility` WORKSPACE: owners and admins); read a SKILL.md file; draft one with AI (nothing saved) |
+| PUT | `/skills/{ref}` (`expected_version`), `/skills/{ref}/enabled`, `/skills/{ref}/workspace-enabled` | save a new version (a built-in: customize it); the caller's switch; the switch for everyone (owners and admins) |
+| DELETE | `/skills/{ref}` | archive (a customized built-in: reset it) |
+| GET / POST | `/skills/{ref}/versions`, `/skills/{ref}/versions/{n}/restore`, `/skills/archived/{id}/restore`, `/skills/{ref}/export` | history; restore a version; bring an archived skill back; download SKILL.md |
 | GET | `/health`, `/health/ready` | liveness, and readiness (database + Redis) |
 
 Event types: `user_message` (the prompt that started a turn), `step_started`, `token` (`reset: true`

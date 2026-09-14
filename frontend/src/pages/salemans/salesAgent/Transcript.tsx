@@ -13,10 +13,12 @@ import {
   Sparkles,
   Undo2,
   UsersRound,
+  WandSparkles,
   Wrench,
 } from 'lucide-react';
 import type { SourceLink, TranscriptItem } from '../../../api/salesAgentApi';
 import { Markdown } from '../../../components/common/Markdown';
+import { skillTitle } from '../skills/skillMeta';
 import { splitAttachmentNote } from './attachments';
 import { isAppLink, isWebLink } from './links';
 import { subagentTitle } from './subagents';
@@ -39,6 +41,12 @@ const TOOL_LABEL: Record<string, string> = {
   read_notion_page: 'Read Notion page',
   search_knowledge_base: 'Search knowledge base',
   read_knowledge_document: 'Read document',
+  list_knowledge_documents: 'List knowledge base',
+  add_web_page_to_knowledge_base: 'Add web page to knowledge base',
+  update_knowledge_document: 'Update document',
+  reclassify_knowledge_document: 'Classify document again',
+  reindex_knowledge_document: 'Index document again',
+  delete_knowledge_document: 'Delete document',
   search_catalog: 'Search catalog',
   check_inventory: 'Check stock',
   web_search: 'Search the web',
@@ -59,6 +67,7 @@ const TOOL_LABEL: Record<string, string> = {
   release_stock: 'Release reservation',
   undo_actions: 'Undo actions',
   delegate: 'Hand over',
+  use_skill: 'Use skill',
   search_deals: 'Search deals',
   create_deal: 'Create deal',
   update_deal: 'Update deal',
@@ -84,10 +93,17 @@ const WRITE_TOOLS = new Set([
   'release_stock',
   'create_deal',
   'update_deal',
+  'add_web_page_to_knowledge_base',
+  'update_knowledge_document',
+  'reclassify_knowledge_document',
+  'reindex_knowledge_document',
+  'delete_knowledge_document',
 ]);
 const MEMORY_TOOLS = new Set(['remember', 'forget']);
 /** Handing part of the job to a sub-agent; its own steps stream in under its name. */
 const DELEGATE_TOOL = 'delegate';
+/** Loading a skill's playbook: picked by the rep, chosen by the agent, or handed to a sub-agent. */
+const SKILL_TOOL = 'use_skill';
 const WHERE_TO_CHECK: Record<string, string> = {
   send_email: ' (check your Sent folder)',
   create_calendar_event: ' (check your calendar)',
@@ -97,6 +113,11 @@ const WHERE_TO_CHECK: Record<string, string> = {
   create_quote: ' (check Google Drive or the knowledge base)',
   create_deal: ' (check Deals)',
   update_deal: ' (check the deal on the Deals page)',
+  add_web_page_to_knowledge_base: ' (check the knowledge vault)',
+  update_knowledge_document: ' (check the document in the knowledge vault)',
+  reclassify_knowledge_document: ' (check the document in the knowledge vault)',
+  reindex_knowledge_document: ' (check the document in the knowledge vault)',
+  delete_knowledge_document: ' (check the knowledge vault)',
 };
 
 function describeResult(item: TranscriptItem): string | null | undefined {
@@ -104,6 +125,10 @@ function describeResult(item: TranscriptItem): string | null | undefined {
     // The engine's own message is written for the model; this one is for the rep.
     const where = WHERE_TO_CHECK[item.tool ?? ''] ?? '';
     return `No confirmation came back, so this may have gone through. Check before trying again${where}.`;
+  }
+  if (item.tool === SKILL_TOOL && item.outcome !== 'EXECUTED') {
+    // The refusal is written for the model ("use an id from the skills list…").
+    return 'That skill isn’t available to your agent, so it carried on without it.';
   }
   return item.summary || item.error;
 }
@@ -155,12 +180,31 @@ function describeCall(item: TranscriptItem): string {
       return [args.sku, args.counted_quantity === undefined ? '' : `count ${String(args.counted_quantity)}`].filter(Boolean).map(String).join(' · ');
     case 'stock_history':
       return args.sku ? String(args.sku) : '';
+    case 'list_knowledge_documents':
+      return [args.status, args.category, typeof args.search === 'string' ? `“${args.search}”` : '']
+        .filter(Boolean)
+        .map(String)
+        .join(' · ');
+    case 'add_web_page_to_knowledge_base':
+      return args.title ? `“${String(args.title)}”` : String(args.url ?? '');
+    case 'update_knowledge_document':
+      // Every field arrives, unset ones as null: name only the ones being changed.
+      return Object.keys(args)
+        .filter((field) => field !== 'doc_id' && args[field] !== null && args[field] !== undefined)
+        .join(', ');
+    case 'reclassify_knowledge_document':
+    case 'reindex_knowledge_document':
+    case 'delete_knowledge_document':
+      return '';
     case 'undo_actions':
       return Array.isArray(args.action_ids) ? `${args.action_ids.length} action${args.action_ids.length === 1 ? '' : 's'}` : '';
     case 'delegate': {
       const worker = subagentTitle(typeof args.agent === 'string' ? args.agent : null);
-      return [worker, typeof args.task === 'string' ? args.task : ''].filter(Boolean).join(' · ');
+      const skill = typeof args.skill === 'string' && args.skill ? `with ${skillTitle(args.skill)}` : '';
+      return [worker, skill, typeof args.task === 'string' ? args.task : ''].filter(Boolean).join(' · ');
     }
+    case 'use_skill':
+      return typeof args.skill === 'string' ? skillTitle(args.skill) : '';
     case 'create_deal':
       return [args.title, args.company].filter(Boolean).map(String).join(' · ');
     case 'update_deal':
@@ -275,7 +319,9 @@ export const Transcript: React.FC<{
               ? Undo2
               : tool === DELEGATE_TOOL
                 ? UsersRound
-                : MEMORY_TOOLS.has(tool)
+                : tool === SKILL_TOOL
+                  ? WandSparkles
+                  : MEMORY_TOOLS.has(tool)
                   ? Brain
                   : WRITE_TOOLS.has(tool)
                     ? Wrench

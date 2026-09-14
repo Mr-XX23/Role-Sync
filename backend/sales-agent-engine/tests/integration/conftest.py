@@ -1,4 +1,4 @@
-"""Integration fixtures: real Postgres (test database) + Redis (db 15) from the local stack."""
+"""Integration fixtures: real Postgres (test database) + Redis (db 15 by default) from the local stack."""
 
 from __future__ import annotations
 
@@ -14,8 +14,9 @@ import pytest
 import uvicorn
 from alembic import command
 from alembic.config import Config as AlembicConfig
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy import pool, text
+from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sse_starlette.sse import AppStatus
 
 from app.autonomy.policy import AutonomyPolicy, EscalateAllPolicy
@@ -43,8 +44,33 @@ def _upgrade(connection) -> None:
     command.upgrade(config, "head")
 
 
+async def _ensure_database(settings: Settings) -> None:
+    """Create the test database on first use (as the data-pipeline suite does), so a checkout running with
+    its own ``SALES_AGENT_TEST_DB_NAME`` needs no manual setup. Only ever for the name the ``settings``
+    fixture accepted: what the engine connects to, and containing ``-test``."""
+    url = settings.sqlalchemy_url
+    name = url.database or ""
+    assert "-test" in name and '"' not in name, f"refusing to create database {name!r}"
+    maintenance = create_async_engine(url.set(database="postgres"), isolation_level="AUTOCOMMIT", poolclass=pool.NullPool)
+    try:
+        async with maintenance.connect() as conn:
+            exists = await conn.scalar(text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": name})
+            if not exists:
+                try:
+                    await conn.execute(text(f'CREATE DATABASE "{name}"'))
+                except ProgrammingError as exc:  # another process created it a moment ago
+                    if "already exists" not in str(exc):
+                        raise
+    finally:
+        await maintenance.dispose()
+
+
 @pytest.fixture(scope="session")
 async def db_engine(settings: Settings) -> AsyncIterator[AsyncEngine]:
+    try:
+        await _ensure_database(settings)
+    except OSError as exc:  # pragma: no cover - environment problem
+        pytest.skip(f"Postgres not reachable for integration tests: {exc}")
     engine = create_engine(settings)
     try:
         async with engine.begin() as conn:
@@ -68,7 +94,8 @@ async def clean(db_engine: AsyncEngine, redis) -> None:
         await conn.execute(
             text(
                 "TRUNCATE agent.audit, agent.saga_step, agent.pending_action, agent.workspace_outbox, "
-                "agent.memory, agent.context_blob, agent.session CASCADE"
+                "agent.memory, agent.context_blob, agent.skill_usage, agent.skill_setting, agent.skill_version, "
+                "agent.skill, agent.session CASCADE"
             )
         )
         await conn.execute(

@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Outlet } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Outlet, useLocation } from 'react-router-dom';
 import {
   Library,
   Cable,
@@ -12,6 +12,7 @@ import {
   MessagesSquare,
   Handshake,
   UserCog,
+  WandSparkles,
 } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import type { SidebarItem } from './Sidebar';
@@ -20,9 +21,12 @@ import { useAppSelector, useAppDispatch } from '../../store';
 import { setModalOpen } from '../../store/taskSlice';
 import { NewInstanceModal } from '../common/NewInstanceModal';
 import { WorkspaceGate } from '../guards/WorkspaceGate';
+import { rememberDashboardPath } from './dashboardMemory';
 
 export const DashboardLayout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { pathname } = useLocation();
+  useEffect(() => rememberDashboardPath('workspace', pathname), [pathname]);
   const { activeRolePack } = useAppSelector((state) => state.role);
   const workspaceId = useAppSelector((state) => state.workspace.currentWorkspace?.workspaceId);
   const workspaceRole = useAppSelector((state) => state.workspace.currentWorkspace?.role);
@@ -45,6 +49,12 @@ export const DashboardLayout: React.FC = () => {
               label: 'Sales Agent',
               icon: MessagesSquare,
               path: '/salesman/sales-agent',
+            },
+            {
+              id: 'skills',
+              label: 'Agent Skills',
+              icon: WandSparkles,
+              path: '/salesman/skills',
             },
             {
               id: 'deals',

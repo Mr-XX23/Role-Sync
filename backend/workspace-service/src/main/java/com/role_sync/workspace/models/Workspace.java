@@ -39,9 +39,14 @@ public class Workspace {
     @JsonIgnore
     private WorkspaceProfile owner;
 
+    /** false: suspended by the RoleSync team; its members can't use it until it is reactivated. */
     @Column(name = "is_active", nullable = false)
     @Builder.Default
     private Boolean isActive = true;
+
+    /** The workspace's plan ({@link PlatformPlan}); null means the default plan. */
+    @Column(name = "plan_id")
+    private UUID planId;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;

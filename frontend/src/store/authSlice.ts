@@ -11,6 +11,8 @@ interface User {
   status?: string;
   // Signed in with a temporary password a workspace admin emailed: choose a new one first.
   mustChangePassword?: boolean;
+  // "SUPER_ADMIN" for platform super admins (decided by auth-service), otherwise null.
+  platformRole?: string | null;
 }
 
 // Define the auth state schema
@@ -105,6 +107,7 @@ export const loginUser = createAsyncThunk(
         role: data.role,
         status: data.status,
         mustChangePassword: Boolean(data.mustChangePassword),
+        platformRole: data.platformRole ?? null,
       };
     } catch (err: any) {
       return rejectWithValue(err.response?.data?.message || err.message || 'An error occurred during authentication.');
@@ -128,6 +131,7 @@ export const checkSession = createAsyncThunk(
         role: data.user.role,
         status: data.user.status,
         mustChangePassword: Boolean(data.user.mustChangePassword),
+        platformRole: data.user.platformRole ?? null,
       };
     } catch (err: any) {
       console.warn('[authSlice] checkSession error:', err.message, 'status:', err.response?.status, 'code:', err.code);
@@ -155,6 +159,7 @@ export const checkSession = createAsyncThunk(
             role: retryData.user.role,
             status: retryData.user.status,
             mustChangePassword: Boolean(retryData.user.mustChangePassword),
+            platformRole: retryData.user.platformRole ?? null,
           };
         } catch (refreshErr: any) {
           console.warn('[authSlice] checkSession: refresh failed:', refreshErr.message);
