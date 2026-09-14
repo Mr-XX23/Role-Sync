@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useReducer, useRef, useState } from 'rea
 import { Link, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, Brain, History, MessageSquarePlus, Sparkles, X } from 'lucide-react';
 import { useToast } from '../../../context/ToastContext';
-import { useAppSelector } from '../../../store';
+import { useAppDispatch, useAppSelector } from '../../../store';
+import { fetchPreferences, fetchProfile } from '../../../store/workspaceSlice';
 import { describeAgentError, salesAgentApi } from '../../../api/salesAgentApi';
 import type { AgentEventType, Decision, SessionStatus, SessionSummary } from '../../../api/salesAgentApi';
 import { skillsApi } from '../../../api/skillsApi';
@@ -28,6 +29,9 @@ const STATUS_AFTER_EVENT: Partial<Record<AgentEventType, SessionStatus>> = {
   error: 'FAILED',
 };
 
+/** Tools whose completed actions change the rep's profile or settings (an undo may put either back). */
+const PROFILE_CHANGING_TOOLS = new Set(['update_my_profile', 'update_my_preferences', 'undo_actions']);
+
 const ToolbarButton: React.FC<{
   label: string;
   icon: React.FC<{ className?: string }>;
@@ -50,6 +54,7 @@ const ToolbarButton: React.FC<{
 export const SalesAgent: React.FC = () => {
   const toast = useToast();
   const [chat, dispatch] = useReducer(chatReducer, emptyChat);
+  const appDispatch = useAppDispatch();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [streamAfter, setStreamAfter] = useState<string | null>(null);
   const [input, setInput] = useState('');
@@ -121,6 +126,11 @@ export const SalesAgent: React.FC = () => {
     const status = STATUS_AFTER_EVENT[event.type];
     if (status) {
       setSessions((rows) => rows.map((row) => (row.id === event.session_id ? { ...row, status } : row)));
+    }
+    // The agent changed the rep's profile or settings: refresh what the rest of the app shows (name, photo, theme).
+    if (event.type === 'tool_result' && event.data.outcome === 'EXECUTED' && PROFILE_CHANGING_TOOLS.has(String(event.data.tool))) {
+      appDispatch(fetchProfile());
+      appDispatch(fetchPreferences());
     }
   });
 

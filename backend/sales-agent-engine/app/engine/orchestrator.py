@@ -79,8 +79,9 @@ SYSTEM_PROMPT = """You are RoleSync's sales assistant. You work for one sales re
 How to work:
 - Use the tools to take action. Never say an action happened unless its tool result has outcome EXECUTED.
 - Actions that change anything outside this chat (email, calendar invites, Slack messages, Notion pages, documents,
-  quotes, catalog, stock and knowledge-base changes) automatically pause for the rep's approval. Call the tool
-  directly with complete, final content; do not ask for permission in chat first. Run such actions one at a time.
+  quotes, catalog, stock and knowledge-base changes, the rep's profile) automatically pause for the rep's approval.
+  Call the tool directly with complete, final content; do not ask for permission in chat first. Run such actions one
+  at a time.
 - If an action is REJECTED, do not retry it unchanged: ask what the rep wants changed.
   If it FAILED or was DENIED, say so briefly and suggest a next step (for example, connecting an app).
 - If an action's outcome is UNKNOWN it may already have happened: never retry it. Tell the rep and ask
@@ -128,6 +129,16 @@ Deals and memory:
   the catalog and knowledge base already hold. If the rep says a remembered fact is wrong, forget it.
 - A tool result that was too long to keep shows "offloaded": call read_offloaded_result with its ref when you need
   the details.
+
+The rep's profile:
+- What you know about who the rep is comes from their profile and settings. get_my_profile shows all of it (contact
+  details and links too, for example for an email signature), with how many profile saves (24 every 24 hours) and
+  profile photo changes (3 every 24 hours) they have left.
+- The profile is the rep's own: change it only when they ask. Before update_my_profile, check with get_my_profile
+  that a save is left and tell the rep how many remain; when none is left, tell them when they can save again instead
+  of proposing the change. Put every change they asked for into one update: each update uses a save, and so does
+  undoing one. The photo is changed on the Profile page, not by you.
+- update_my_preferences changes their time zone, language and theme; it has no limit.
 
 Sub-agents:
 - You are the only one who talks to the rep. When a part of the request takes several steps in one area, hand that
@@ -262,7 +273,7 @@ class Orchestrator:
         steps = steps_taken + 1
         wrap_up = bool(state.get("wrap_up"))
         await emit_best_effort(self._events, ctx.session_id, EventType.STEP_STARTED, {"step": "planning", "number": steps})
-        system = SYSTEM_PROMPT.format(time_context=_time_context(state.get("time_zone")))
+        system = SYSTEM_PROMPT.format(time_context=_time_context(await self._time_zone(ctx, state)))
         if self._skills is not None and self._registry.get(SKILL_TOOL) is not None:
             index = await self._skills.index_text(ctx.tenant_id, ctx.user_id)
             if index:
@@ -467,6 +478,14 @@ class Orchestrator:
             for d in self._scopes.tools_for(agent_name, self._registry)
         )
 
+    async def _time_zone(self, ctx: AgentContext, state: dict[str, Any]) -> str | None:
+        """The time zone of the rep's browser for this request; when none was sent, the one in their settings."""
+        zone = valid_time_zone(state.get("time_zone"))
+        if zone is None and self._context is not None:
+            profile = await self._context.rep_profile(ctx)
+            zone = profile.time_zone if profile is not None else None
+        return zone
+
     # ------------------------------------------------------------------ sub-agents
     async def _plan_delegations(self, state: dict[str, Any]) -> dict[str, Any]:
         """One model step for each running sub-agent. They are independent, so they think together;
@@ -545,7 +564,7 @@ class Orchestrator:
         history = [Message.from_dict(item) for item in delegation.get("messages") or []]
         steps = int(delegation.get("steps") or 0) + 1
         last = steps >= agent.max_steps
-        system = f"{agent.prompt}\n\n{_time_context(state.get('time_zone'))}"
+        system = f"{agent.prompt}\n\n{_time_context(await self._time_zone(ctx, state))}"
         if self._context is not None:
             rep = await self._context.rep_context(ctx)
             if rep:

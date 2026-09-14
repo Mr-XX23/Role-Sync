@@ -33,7 +33,8 @@ SCOPES: Mapping[str, frozenset[ToolScope]] = {
     "orchestrator": frozenset(ToolScope),
     # Sub-agents (Phase 5). None of them has DELEGATE, so a sub-agent cannot start another, or KNOWLEDGE,
     # so none can change or delete the workspace's knowledge base (they can read it), or CATALOG_SETUP, so
-    # none sets up categories, stock locations or SKUs (the quote agent prices and holds stock).
+    # none sets up categories, stock locations or SKUs (the quote agent prices and holds stock), or PROFILE,
+    # so none changes the rep's profile or settings (they can read them).
     "research": frozenset({ToolScope.READ}),
     "outreach": frozenset({ToolScope.READ, ToolScope.COMMUNICATION}),
     "quote": frozenset({ToolScope.READ, ToolScope.CATALOG, ToolScope.DOCUMENT}),

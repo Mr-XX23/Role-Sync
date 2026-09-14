@@ -3,8 +3,9 @@
 The graph state keeps a session's whole conversation (the transcript the rep sees). What goes
 to the model is built here:
 
-1. **What is known about the rep:** their profile's own words for the agent and communication
-   style (workspace-service), plus facts the agent saved about them (REP memory).
+1. **What is known about the rep:** who they are and how they work, from their profile and settings
+   (workspace-service: name, title, company, location, language, communication style, their own words
+   for the agent, expertise, skills, bio), plus facts the agent saved about them (REP memory).
 2. **Offloaded results:** a tool result larger than ``tool_result_max_chars`` is stored once
    (``agent.context_blob``) and the conversation keeps a preview plus a reference, which the
    ``read_offloaded_result`` tool reads back on demand.
@@ -256,25 +257,22 @@ class ContextManager:
         """What is known about the rep, for a sub-agent's prompt (the planner gets it from ``prepare``)."""
         return await self._rep_block(ctx)
 
+    async def rep_profile(self, ctx: AgentContext) -> RepProfile | None:
+        """The rep's profile and settings (briefly cached); ``None`` when there is none or it can't be read."""
+        if self._profiles is None:
+            return None
+        try:
+            return await self._profiles.get(ctx.user_id)
+        except Exception:
+            logger.warning("could not load the rep's profile", exc_info=True)
+            return None
+
     async def _rep_block(self, ctx: AgentContext) -> str:
-        profile: RepProfile | None = None
-        if self._profiles is not None:
-            try:
-                profile = await self._profiles.get(ctx.user_id)
-            except Exception:
-                logger.warning("could not load the rep's profile", exc_info=True)
+        profile = await self.rep_profile(ctx)
         record = await self._memory.latest(tenant_id=ctx.tenant_id, scope=MemoryScope.REP, key=str(ctx.user_id))
         facts = facts_of(record.content if record else None)
 
-        lines: list[str] = []
-        if profile is not None:
-            who = ", ".join(part for part in (profile.first_name, profile.job_title) if part)
-            if who:
-                lines.append(f"- Rep: {who}")
-            if profile.communication_style:
-                lines.append(f"- Preferred communication style: {profile.communication_style}")
-            if profile.persona_context:
-                lines.append(f"- In their own words: {_clip(profile.persona_context, 1_500)}")
+        lines = _profile_lines(profile) if profile is not None else []
         if facts:
             lines.append("- What you have learned about them (id in brackets, for forget):")
             budget = self._budget.rep_context_chars
@@ -290,6 +288,32 @@ class ContextManager:
 
 
 # ----------------------------------------------------------------------------- helpers
+
+_LANGUAGES = {"en": "English", "es": "Spanish", "fr": "French", "de": "German"}
+
+
+def _profile_lines(profile: RepProfile) -> list[str]:
+    """The rep as their profile describes them. Contact details and links stay out of every prompt
+    (get_my_profile has them), and so does the time zone, which the time context already uses."""
+    lines: list[str] = []
+    who = ", ".join(part for part in (profile.name, profile.job_title, profile.department, profile.organization) if part)
+    if who:
+        lines.append(f"- Rep: {who}")
+    if profile.location:
+        lines.append(f"- Based in: {profile.location}")
+    if profile.language and profile.language != "en":
+        lines.append(f"- Language in their settings: {_LANGUAGES.get(profile.language, profile.language)}")
+    if profile.communication_style:
+        lines.append(f"- Preferred communication style: {profile.communication_style}")
+    if profile.persona_context:
+        lines.append(f"- In their own words: {_clip(profile.persona_context, 1_500)}")
+    if profile.expertise:
+        lines.append(f"- Expertise: {_clip(profile.expertise, 300)}")
+    if profile.skills:
+        lines.append(f"- Skills: {_clip(profile.skills, 300)}")
+    if profile.bio:
+        lines.append(f"- About them: {_clip(profile.bio, 600)}")
+    return lines
 
 
 def _clip(text: str, limit: int) -> str:

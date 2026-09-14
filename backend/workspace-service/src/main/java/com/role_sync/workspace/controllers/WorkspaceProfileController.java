@@ -2,6 +2,7 @@ package com.role_sync.workspace.controllers;
 
 import com.role_sync.workspace.dto.OnboardingStepRequest;
 import com.role_sync.workspace.dto.PreferencesRequest;
+import com.role_sync.workspace.dto.ProfileLimitsResponse;
 import com.role_sync.workspace.dto.WorkspaceProfileRequest;
 import com.role_sync.workspace.models.OnboardingState;
 import com.role_sync.workspace.models.WorkspacePreferences;
@@ -36,7 +37,8 @@ public class WorkspaceProfileController {
             @RequestHeader(value = "X-Auth-User-Id", required = false) String authUserIdHeader) {
         
         UUID authUserId = resolveAuthUserId(userIdHeader, authUserIdHeader);
-        return cloudinaryService.uploadAvatar(filePart, authUserId.toString())
+        return workspaceProfileService.requirePhotoChangeLeft(authUserId)
+                .then(Mono.defer(() -> cloudinaryService.uploadAvatar(filePart, authUserId.toString())))
                 .flatMap(url -> workspaceProfileService.updateAvatarUrl(authUserId, url)
                         .thenReturn(url))
                 .map(url -> ResponseEntity.ok(Map.of(
@@ -56,7 +58,8 @@ public class WorkspaceProfileController {
         if (url == null || url.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Missing 'url' parameter in request body");
         }
-        return cloudinaryService.uploadImageUrl(url, authUserId.toString())
+        return workspaceProfileService.requirePhotoChangeLeft(authUserId)
+                .then(Mono.defer(() -> cloudinaryService.uploadImageUrl(url, authUserId.toString())))
                 .flatMap(hostedUrl -> workspaceProfileService.updateAvatarUrl(authUserId, hostedUrl)
                         .thenReturn(hostedUrl))
                 .map(hostedUrl -> ResponseEntity.ok(Map.of(
@@ -85,6 +88,16 @@ public class WorkspaceProfileController {
             @RequestHeader(value = "X-Auth-User-Id", required = false) String authUserIdHeader) {
         UUID authUserId = resolveAuthUserId(userIdHeader, authUserIdHeader);
         return workspaceProfileService.getProfile(authUserId)
+                .map(ResponseEntity::ok);
+    }
+
+    /** Profile saves and profile photo changes left in the current 24-hour windows. */
+    @GetMapping("/limits")
+    public Mono<ResponseEntity<ProfileLimitsResponse>> getLimits(
+            @RequestHeader(value = "X-User-Id", required = false) String userIdHeader,
+            @RequestHeader(value = "X-Auth-User-Id", required = false) String authUserIdHeader) {
+        UUID authUserId = resolveAuthUserId(userIdHeader, authUserIdHeader);
+        return workspaceProfileService.getLimits(authUserId)
                 .map(ResponseEntity::ok);
     }
 

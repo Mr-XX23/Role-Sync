@@ -41,7 +41,13 @@ from app.platform.jwt_verifier import AccessTokenVerifier, SigningKeys
 from app.platform.langgraph_runtime import GraphApprovalPort, GraphRuntime, GraphSpec, open_checkpointer
 from app.platform.redis import create_redis
 from app.platform.web_search import TavilySearch
-from app.platform.workspace_client import DealsClient, RepProfileClient, WorkspaceDirectory, WorkspaceRecordsClient
+from app.platform.workspace_client import (
+    DealsClient,
+    ProfileClient,
+    RepProfileClient,
+    WorkspaceDirectory,
+    WorkspaceRecordsClient,
+)
 from app.skills.service import SKILL_TOOL, SkillService
 from app.skills.store import SkillStore
 from app.tools.adapters.catalog import catalog_tools
@@ -55,6 +61,7 @@ from app.tools.adapters.knowledge import knowledge_tools
 from app.tools.adapters.knowledge_writes import knowledge_write_tools
 from app.tools.adapters.memory import memory_tools
 from app.tools.adapters.notion import notion_tools
+from app.tools.adapters.profile import profile_tools
 from app.tools.adapters.quotes import quote_tools
 from app.tools.adapters.skills import skill_tools
 from app.tools.adapters.slack import slack_tools
@@ -154,6 +161,7 @@ def default_registry(
     http: httpx.AsyncClient,
     workspaces: WorkspaceDirectory,
     deals: DealsClient,
+    rep_profiles: RepProfileClient | None = None,
 ) -> ToolRegistry:
     definitions = []
     if connector is None:
@@ -172,6 +180,7 @@ def default_registry(
         *catalog_write_tools(data_pipeline, workspaces),
         *catalog_setup_tools(data_pipeline, workspaces),
         *deal_tools(deals, workspaces),
+        *profile_tools(ProfileClient(base_url=settings.workspace_service_url, http=http), rep_profiles),
     ]
     store = DocumentStore(
         connector=connector,
@@ -239,6 +248,9 @@ async def build_container(
             cache_seconds=settings.membership_cache_seconds,
         )
         deals = DealsClient(base_url=settings.workspace_service_url, http=http_client)
+        rep_profiles = RepProfileClient(
+            base_url=settings.workspace_service_url, http=http_client, cache_seconds=settings.profile_cache_seconds
+        )
         memory = MemoryStore(sessionmaker, versions_kept=settings.memory_versions_kept)
         blobs = BlobStore(sessionmaker)
         if registry is None:
@@ -248,7 +260,13 @@ async def build_container(
                     toolkit_versions=settings.composio_versions(),
                 )
             registry = default_registry(
-                settings, connector=connector, router=model_router, http=http_client, workspaces=workspaces, deals=deals
+                settings,
+                connector=connector,
+                router=model_router,
+                http=http_client,
+                workspaces=workspaces,
+                deals=deals,
+                rep_profiles=rep_profiles,
             )
         # The agent's own memory is always available (it depends on nothing outside the engine).
         for definition in memory_tools(memory, blobs, workspaces, deals, facts_per_key=settings.memory_facts_per_key):
@@ -305,9 +323,7 @@ async def build_container(
                 keep_recent_turns=settings.context_keep_recent_turns,
                 tool_result_max_chars=settings.tool_result_max_chars,
             ),
-            profiles=RepProfileClient(
-                base_url=settings.workspace_service_url, http=http_client, cache_seconds=settings.profile_cache_seconds
-            ),
+            profiles=rep_profiles,
         )
         gate = ToolGate(
             registry=registry,

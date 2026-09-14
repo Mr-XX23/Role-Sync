@@ -2,6 +2,7 @@ package com.role_sync.workspace.services;
 
 import com.role_sync.workspace.dto.OnboardingStepRequest;
 import com.role_sync.workspace.dto.PreferencesRequest;
+import com.role_sync.workspace.dto.ProfileLimitsResponse;
 import com.role_sync.workspace.dto.WorkspaceProfileRequest;
 import com.role_sync.workspace.models.OnboardingState;
 import com.role_sync.workspace.models.WorkspacePreferences;
@@ -9,14 +10,23 @@ import com.role_sync.workspace.models.WorkspaceProfile;
 import com.role_sync.workspace.repository.OnboardingStateRepository;
 import com.role_sync.workspace.repository.WorkspacePreferencesRepository;
 import com.role_sync.workspace.repository.WorkspaceProfileRepository;
+import com.role_sync.workspace.services.ProfileChangeLimits.Kind;
+import com.role_sync.workspace.services.ProfileChangeLimits.Usage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 @Slf4j
 @Service
@@ -27,9 +37,9 @@ public class WorkspaceProfileServiceImpl implements WorkspaceProfileService {
     private final WorkspacePreferencesRepository workspacePreferencesRepository;
     private final OnboardingStateRepository onboardingStateRepository;
     private final CloudinaryService cloudinaryService;
+    private final PlatformTransactionManager transactionManager;
 
     @Override
-    @Transactional
     public Mono<WorkspaceProfile> createOrUpdateProfile(UUID authUserId, WorkspaceProfileRequest request) {
         return Mono.fromCallable(() -> {
             String sanitizedFirst = com.role_sync.workspace.utils.SanitizationUtils.sanitizeText(request.getFirstName());
@@ -57,8 +67,20 @@ public class WorkspaceProfileServiceImpl implements WorkspaceProfileService {
             String sanitizedInstagram = com.role_sync.workspace.utils.SanitizationUtils.sanitizeUrl(request.getInstagramUrl());
             String sanitizedBio = com.role_sync.workspace.utils.SanitizationUtils.sanitizeText(request.getBio());
 
-            // If an external image URL is provided and not yet hosted on Cloudinary, host it permanently
-            if (sanitizedAvatar != null && !sanitizedAvatar.isBlank() && !sanitizedAvatar.contains("cloudinary.com")) {
+            WorkspaceProfile existing = workspaceProfileRepository.findByAuthUserId(authUserId).orElse(null);
+            boolean newPhoto = request.getAvatarUrl() != null
+                    && ProfileChangeLimits.isNewPhoto(existing == null ? null : existing.getAvatarUrl(), sanitizedAvatar);
+            if (existing != null) {
+                // A save over a limit is refused before its photo is hosted; the counts are taken under a lock below.
+                LocalDateTime checkedAt = LocalDateTime.now();
+                ProfileChangeLimits.usage(existing, Kind.PROFILE_SAVES, checkedAt).plusOne(checkedAt);
+                if (newPhoto) {
+                    ProfileChangeLimits.usage(existing, Kind.PHOTO_CHANGES, checkedAt).plusOne(checkedAt);
+                }
+            }
+
+            // If a new external image URL is provided and not yet hosted on Cloudinary, host it permanently
+            if (newPhoto && !sanitizedAvatar.contains("cloudinary.com")) {
                 try {
                     String permanentUrl = cloudinaryService.uploadImageUrl(sanitizedAvatar, authUserId.toString()).block();
                     if (permanentUrl != null && !permanentUrl.isBlank()) {
@@ -69,14 +91,15 @@ public class WorkspaceProfileServiceImpl implements WorkspaceProfileService {
                 }
             }
 
-            java.time.LocalDateTime now = java.time.LocalDateTime.now();
-            WorkspaceProfile profile = workspaceProfileRepository.findByAuthUserId(authUserId)
-                    .orElse(null);
-            if (profile == null) {
+            LocalDateTime now = LocalDateTime.now();
+            WorkspaceProfile profile;
+            if (existing == null) {
                 profile = WorkspaceProfile.builder()
                         .authUserId(authUserId)
                         .dailyUpdateCount(1)
                         .updateWindowStart(now)
+                        .avatarChangeCount(newPhoto ? 1 : 0)
+                        .avatarWindowStart(newPhoto ? now : null)
                         .firstName(sanitizedFirst)
                         .lastName(sanitizedLast)
                         .displayName(sanitizedDisplay)
@@ -121,68 +144,97 @@ public class WorkspaceProfileServiceImpl implements WorkspaceProfileService {
                         .build();
                 onboardingStateRepository.save(onboarding);
             } else {
-                // Rate limit enforcement: Maximum 2 updates per 24 hours
-                java.time.LocalDateTime windowStart = profile.getUpdateWindowStart();
-                Integer currentCount = profile.getDailyUpdateCount();
-                if (currentCount == null) currentCount = 0;
-
-                if (windowStart == null || windowStart.isBefore(now.minusHours(24))) {
-                    // Reset 24-hour window
-                    profile.setUpdateWindowStart(now);
-                    profile.setDailyUpdateCount(1);
-                } else {
-                    if (currentCount >= 2) {
-                        java.time.Duration remaining = java.time.Duration.between(now, windowStart.plusHours(24));
-                        long hoursRemaining = Math.max(0, remaining.toHours());
-                        long minutesRemaining = Math.max(1, remaining.toMinutes() % 60);
-                        String timeMessage = hoursRemaining > 0 
-                                ? hoursRemaining + " hour(s) and " + minutesRemaining + " minute(s)"
-                                : minutesRemaining + " minute(s)";
-                        throw new org.springframework.web.server.ResponseStatusException(
-                                org.springframework.http.HttpStatus.TOO_MANY_REQUESTS,
-                                "Profile update rate limit reached. You can only update your profile 2 times every 24 hours. Please try again in " + timeMessage + "."
-                        );
+                String photo = sanitizedAvatar;
+                profile = inTransaction(() -> {
+                    WorkspaceProfile locked = workspaceProfileRepository.lockByProfileId(existing.getProfileId())
+                            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Workspace profile not found"));
+                    // Both counts are taken before anything changes: a save over either limit changes nothing.
+                    Usage saves = ProfileChangeLimits.usage(locked, Kind.PROFILE_SAVES, now).plusOne(now);
+                    Usage photos = request.getAvatarUrl() != null && ProfileChangeLimits.isNewPhoto(locked.getAvatarUrl(), photo)
+                            ? ProfileChangeLimits.usage(locked, Kind.PHOTO_CHANGES, now).plusOne(now)
+                            : null;
+                    ProfileChangeLimits.record(locked, saves);
+                    if (photos != null) {
+                        ProfileChangeLimits.record(locked, photos);
                     }
-                    profile.setDailyUpdateCount(currentCount + 1);
-                }
-                if (request.getFirstName() != null) profile.setFirstName(sanitizedFirst);
-                if (request.getLastName() != null) profile.setLastName(sanitizedLast);
-                if (request.getDisplayName() != null) profile.setDisplayName(sanitizedDisplay);
-                if (request.getAvatarUrl() != null) profile.setAvatarUrl(sanitizedAvatar);
-                if (request.getJobTitle() != null) profile.setJobTitle(sanitizedJob);
-                if (request.getDepartment() != null) profile.setDepartment(sanitizedDept);
-                if (request.getOrganization() != null) profile.setOrganization(sanitizedOrg);
-                if (request.getLocation() != null) profile.setLocation(sanitizedLoc);
-                if (request.getSecondaryEmail() != null) profile.setSecondaryEmail(sanitizedSecEmail);
-                if (request.getPhoneNumber() != null) profile.setPhoneNumber(sanitizedPhone);
-                if (request.getEducation() != null) profile.setEducation(sanitizedEdu);
-                if (request.getExpertise() != null) profile.setExpertise(sanitizedExp);
-                if (request.getSkills() != null) profile.setSkills(sanitizedSkills);
-                if (request.getInterests() != null) profile.setInterests(sanitizedInterests);
-                if (request.getHobbies() != null) profile.setHobbies(sanitizedHobbies);
-                if (request.getAiPersonaContext() != null) profile.setAiPersonaContext(sanitizedAiContext);
-                if (request.getCommunicationStyle() != null) profile.setCommunicationStyle(sanitizedCommStyle);
-                if (request.getLinkedinUrl() != null) profile.setLinkedinUrl(sanitizedLinkedin);
-                if (request.getGithubUrl() != null) profile.setGithubUrl(sanitizedGithub);
-                if (request.getWebsiteUrl() != null) profile.setWebsiteUrl(sanitizedWebsite);
-                if (request.getFacebookUrl() != null) profile.setFacebookUrl(sanitizedFacebook);
-                if (request.getXUrl() != null) profile.setXUrl(sanitizedX);
-                if (request.getInstagramUrl() != null) profile.setInstagramUrl(sanitizedInstagram);
-                if (request.getBio() != null) profile.setBio(sanitizedBio);
-                profile = workspaceProfileRepository.save(profile);
+                    if (request.getFirstName() != null) locked.setFirstName(sanitizedFirst);
+                    if (request.getLastName() != null) locked.setLastName(sanitizedLast);
+                    if (request.getDisplayName() != null) locked.setDisplayName(sanitizedDisplay);
+                    if (request.getAvatarUrl() != null) locked.setAvatarUrl(photo);
+                    if (request.getJobTitle() != null) locked.setJobTitle(sanitizedJob);
+                    if (request.getDepartment() != null) locked.setDepartment(sanitizedDept);
+                    if (request.getOrganization() != null) locked.setOrganization(sanitizedOrg);
+                    if (request.getLocation() != null) locked.setLocation(sanitizedLoc);
+                    if (request.getSecondaryEmail() != null) locked.setSecondaryEmail(sanitizedSecEmail);
+                    if (request.getPhoneNumber() != null) locked.setPhoneNumber(sanitizedPhone);
+                    if (request.getEducation() != null) locked.setEducation(sanitizedEdu);
+                    if (request.getExpertise() != null) locked.setExpertise(sanitizedExp);
+                    if (request.getSkills() != null) locked.setSkills(sanitizedSkills);
+                    if (request.getInterests() != null) locked.setInterests(sanitizedInterests);
+                    if (request.getHobbies() != null) locked.setHobbies(sanitizedHobbies);
+                    if (request.getAiPersonaContext() != null) locked.setAiPersonaContext(sanitizedAiContext);
+                    if (request.getCommunicationStyle() != null) locked.setCommunicationStyle(sanitizedCommStyle);
+                    if (request.getLinkedinUrl() != null) locked.setLinkedinUrl(sanitizedLinkedin);
+                    if (request.getGithubUrl() != null) locked.setGithubUrl(sanitizedGithub);
+                    if (request.getWebsiteUrl() != null) locked.setWebsiteUrl(sanitizedWebsite);
+                    if (request.getFacebookUrl() != null) locked.setFacebookUrl(sanitizedFacebook);
+                    if (request.getXUrl() != null) locked.setXUrl(sanitizedX);
+                    if (request.getInstagramUrl() != null) locked.setInstagramUrl(sanitizedInstagram);
+                    if (request.getBio() != null) locked.setBio(sanitizedBio);
+                    return workspaceProfileRepository.save(locked);
+                });
             }
             return profile;
         }).subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
-    @Transactional
     public Mono<WorkspaceProfile> updateAvatarUrl(UUID authUserId, String avatarUrl) {
         return Mono.fromCallable(() -> {
             WorkspaceProfile profile = getOrCreateProfile(authUserId);
-            profile.setAvatarUrl(avatarUrl);
-            return workspaceProfileRepository.save(profile);
+            return inTransaction(() -> {
+                WorkspaceProfile locked = workspaceProfileRepository.lockByProfileId(profile.getProfileId())
+                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Workspace profile not found"));
+                if (ProfileChangeLimits.isNewPhoto(locked.getAvatarUrl(), avatarUrl)) {
+                    LocalDateTime now = LocalDateTime.now();
+                    ProfileChangeLimits.record(locked, ProfileChangeLimits.usage(locked, Kind.PHOTO_CHANGES, now).plusOne(now));
+                }
+                locked.setAvatarUrl(avatarUrl);
+                return workspaceProfileRepository.save(locked);
+            });
         }).subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Override
+    public Mono<Void> requirePhotoChangeLeft(UUID authUserId) {
+        return Mono.fromRunnable(() -> workspaceProfileRepository.findByAuthUserId(authUserId).ifPresent(profile -> {
+                    LocalDateTime now = LocalDateTime.now();
+                    ProfileChangeLimits.usage(profile, Kind.PHOTO_CHANGES, now).plusOne(now);
+                }))
+                .subscribeOn(Schedulers.boundedElastic())
+                .then();
+    }
+
+    @Override
+    public Mono<ProfileLimitsResponse> getLimits(UUID authUserId) {
+        return Mono.fromCallable(() -> {
+            WorkspaceProfile profile = workspaceProfileRepository.findByAuthUserId(authUserId).orElse(null);
+            LocalDateTime now = LocalDateTime.now();
+            return new ProfileLimitsResponse(
+                    allowance(ProfileChangeLimits.usage(profile, Kind.PROFILE_SAVES, now)),
+                    allowance(ProfileChangeLimits.usage(profile, Kind.PHOTO_CHANGES, now)));
+        }).subscribeOn(Schedulers.boundedElastic());
+    }
+
+    private static ProfileLimitsResponse.Allowance allowance(Usage usage) {
+        LocalDateTime resetsAt = usage.resetsAt();
+        return new ProfileLimitsResponse.Allowance(usage.limit(), usage.used(), usage.remaining(),
+                ProfileChangeLimits.WINDOW.toHours(),
+                resetsAt == null ? null : resetsAt.atZone(ZoneId.systemDefault()).toInstant().toString());
+    }
+
+    private <T> T inTransaction(Supplier<T> work) {
+        return new TransactionTemplate(transactionManager).execute(status -> work.get());
     }
 
     private WorkspaceProfile getOrCreateProfile(UUID authUserId) {

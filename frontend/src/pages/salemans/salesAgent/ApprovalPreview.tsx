@@ -669,6 +669,65 @@ const KnowledgeDeletePreview: React.FC<{ preview: Preview }> = ({ preview }) => 
   </div>
 );
 
+/** "2026-09-15T10:00:00Z" → "Tue 15 Sep, 16:00" in the reviewer's own time zone. */
+function localTime(value: unknown): string {
+  const date = new Date(text(value));
+  if (!text(value) || Number.isNaN(date.getTime())) return text(value);
+  return date.toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+const ProfileUpdatePreview: React.FC<{ preview: Preview }> = ({ preview }) => {
+  const saves = record(preview.profile_saves);
+  const remaining = typeof saves.remaining === 'number' ? saves.remaining : null;
+  return (
+    <div className="space-y-2 text-sm">
+      <DataTable
+        columns={['Field', 'Change']}
+        rows={list(preview.changes).map((raw) => {
+          const change = record(raw);
+          return [text(change.label) || text(change.field).replace(/_/g, ' '), <BeforeAfter before={change.before} after={change.after} />];
+        })}
+      />
+      {remaining !== null && remaining <= 1 ? (
+        <Warning>
+          This uses your last profile save for now ({text(saves.limit)} every 24 hours)
+          {text(saves.resets_at) ? `; saving is possible again from ${localTime(saves.resets_at)}` : ''}. Undoing it would need
+          another save.
+        </Warning>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          {remaining !== null
+            ? `Uses 1 of your ${remaining} remaining profile saves (${text(saves.limit)} every 24 hours).`
+            : 'Uses one of your profile saves.'}{' '}
+          Only these fields change. Undoing puts the previous values back and uses a save too.
+        </p>
+      )}
+    </div>
+  );
+};
+
+const LANGUAGE_LABEL: Record<string, string> = { en: 'English', es: 'Spanish', fr: 'French', de: 'German' };
+
+const settingValue = (field: string, value: unknown): unknown => {
+  if (field === 'language') return LANGUAGE_LABEL[text(value)] ?? value;
+  if (field === 'theme') return capitalized(value);
+  return value;
+};
+
+const PreferencesUpdatePreview: React.FC<{ preview: Preview }> = ({ preview }) => (
+  <div className="space-y-2 text-sm">
+    <DataTable
+      columns={['Setting', 'Change']}
+      rows={list(preview.changes).map((raw) => {
+        const change = record(raw);
+        const field = text(change.field);
+        return [text(change.label) || field, <BeforeAfter before={settingValue(field, change.before)} after={settingValue(field, change.after)} />];
+      })}
+    />
+    <p className="text-xs text-muted-foreground">Settings have no daily limit. Undoing puts the previous values back.</p>
+  </div>
+);
+
 export const UndoPreview: React.FC<{
   preview: Preview;
   selected?: Set<string>;
@@ -773,6 +832,10 @@ export const PreviewBody: React.FC<{ card: ApprovalCardModel }> = ({ card }) => 
       return <KnowledgeReindexPreview preview={preview} />;
     case 'knowledge_delete':
       return <KnowledgeDeletePreview preview={preview} />;
+    case 'profile_update':
+      return <ProfileUpdatePreview preview={preview} />;
+    case 'preferences_update':
+      return <PreferencesUpdatePreview preview={preview} />;
     case 'undo':
       return <UndoPreview preview={preview} />;
     default:

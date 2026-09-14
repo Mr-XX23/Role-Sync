@@ -32,6 +32,7 @@ class ToolScope(StrEnum):
     DOCUMENT = "DOCUMENT"  # document generation, drive / KB storage, quotes
     CRM = "CRM"  # deal records
     KNOWLEDGE = "KNOWLEDGE"  # adding, changing and deleting knowledge-base documents (the coordinator only)
+    PROFILE = "PROFILE"  # the rep's own profile and settings (the coordinator only)
     COMPENSATION = "COMPENSATION"  # undoing completed actions (the coordinator only)
     MEMORY = "MEMORY"  # saving and forgetting what the agent remembers
     DELEGATE = "DELEGATE"  # handing work to a sub-agent (the coordinator only)

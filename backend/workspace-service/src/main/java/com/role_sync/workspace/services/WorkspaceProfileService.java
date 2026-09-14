@@ -2,6 +2,7 @@ package com.role_sync.workspace.services;
 
 import com.role_sync.workspace.dto.OnboardingStepRequest;
 import com.role_sync.workspace.dto.PreferencesRequest;
+import com.role_sync.workspace.dto.ProfileLimitsResponse;
 import com.role_sync.workspace.dto.WorkspaceProfileRequest;
 import com.role_sync.workspace.models.OnboardingState;
 import com.role_sync.workspace.models.WorkspacePreferences;
@@ -13,6 +14,9 @@ import java.util.UUID;
 public interface WorkspaceProfileService {
     Mono<WorkspaceProfile> createOrUpdateProfile(UUID authUserId, WorkspaceProfileRequest request);
     Mono<WorkspaceProfile> updateAvatarUrl(UUID authUserId, String avatarUrl);
+    /** Fails with 429 when the caller has no profile photo change left, so nothing is uploaded in vain. */
+    Mono<Void> requirePhotoChangeLeft(UUID authUserId);
+    Mono<ProfileLimitsResponse> getLimits(UUID authUserId);
     Mono<WorkspacePreferences> updatePreferences(UUID authUserId, PreferencesRequest request);
     Mono<OnboardingState> updateOnboardingStep(UUID authUserId, OnboardingStepRequest request);
     Mono<WorkspaceProfile> getProfile(UUID authUserId);

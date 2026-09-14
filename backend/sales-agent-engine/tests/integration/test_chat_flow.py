@@ -179,6 +179,21 @@ async def test_a_finished_session_takes_a_follow_up_turn(make_container, rsa_key
     assert [e.envelope["type"] for e in later] == ["done"]
 
 
+async def test_a_run_without_a_browser_time_zone_uses_the_one_in_the_reps_settings(
+    make_container, tenant_id, user_id, workspace_service
+):
+    workspace_service.profiles[user_id] = {"firstName": "Rohan", "jobTitle": "Account Executive"}
+    workspace_service.preferences[user_id] = {"theme": "dark", "language": "en", "timezone": "Asia/Kathmandu"}
+    brain = ScriptedBrain()
+    container = await make_container(providers={"gemini": brain}, registry=_gmail_registry(FakeConnector(connected=False)))
+
+    ctx = await _start(container, tenant_id, user_id)  # no time zone: not started from a browser
+    await _wait_for_status(container, ctx.session_id, SessionStatus.DONE)
+
+    system = brain.tasks[0].system
+    assert "in the rep's time zone (Asia/Kathmandu)" in system and "Rep: Rohan, Account Executive" in system
+
+
 async def test_paused_run_survives_a_restart_and_resumes_on_approval(make_container, tenant_id, user_id):
     gmail = FakeConnector()
     first = await make_container(providers={"gemini": ScriptedBrain()}, registry=_gmail_registry(gmail))

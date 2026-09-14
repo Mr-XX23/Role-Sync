@@ -13,7 +13,9 @@ authorizes every call against that user's membership, the same as for gateway tr
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -152,13 +154,31 @@ class WorkspaceServiceError(Exception):
 @dataclass(frozen=True, slots=True)
 class RepProfile:
     first_name: str | None = None
+    last_name: str | None = None
+    display_name: str | None = None
     job_title: str | None = None
+    department: str | None = None
+    organization: str | None = None
+    location: str | None = None
+    expertise: str | None = None
+    skills: str | None = None
+    bio: str | None = None
     communication_style: str | None = None
     persona_context: str | None = None  # the rep's own words for the agent ("Custom AI Agent Context")
+    # From the rep's settings. The time zone is None while it is still the UTC every profile starts with.
+    time_zone: str | None = None
+    language: str | None = None
+
+    @property
+    def name(self) -> str | None:
+        return self.display_name or " ".join(part for part in (self.first_name, self.last_name) if part) or None
+
+
+_STARTING_TIME_ZONES = frozenset({"UTC", "Etc/UTC", "GMT"})
 
 
 class RepProfileClient:
-    """The rep's workspace profile, briefly cached. Best effort: no profile is never an error."""
+    """The rep's workspace profile and settings, briefly cached. Best effort: no profile is never an error."""
 
     def __init__(self, *, base_url: str, http: httpx.AsyncClient, cache_seconds: float = 300.0) -> None:
         self._base_url = base_url.rstrip("/")
@@ -167,66 +187,62 @@ class RepProfileClient:
         self._cache: dict[UUID, tuple[float, RepProfile | None]] = {}
 
     async def get(self, user_id: UUID) -> RepProfile | None:
-        import time
-
         now = time.monotonic()
         cached = self._cache.get(user_id)
         if cached is not None and now - cached[0] < self._ttl:
             return cached[1]
         try:
-            response = await self._http.get(
-                f"{self._base_url}/api/v1/workspaces/profile", headers={"X-User-Id": str(user_id)}, timeout=5.0
+            body, settings = await asyncio.gather(
+                self._object(user_id, "/api/v1/workspaces/profile"),
+                self._object(user_id, "/api/v1/workspaces/profile/preferences"),
             )
         except httpx.HTTPError:
             return cached[1] if cached is not None else None
         profile = None
-        if response.status_code == 200:
-            body = response.json() if response.content else {}
+        if body is not None:
+            settings = settings or {}
+            zone = _text_or_none(settings.get("timezone"))
             profile = RepProfile(
                 first_name=_text_or_none(body.get("firstName")),
+                last_name=_text_or_none(body.get("lastName")),
+                display_name=_text_or_none(body.get("displayName")),
                 job_title=_text_or_none(body.get("jobTitle")),
+                department=_text_or_none(body.get("department")),
+                organization=_text_or_none(body.get("organization")),
+                location=_text_or_none(body.get("location")),
+                expertise=_text_or_none(body.get("expertise")),
+                skills=_text_or_none(body.get("skills")),
+                bio=_text_or_none(body.get("bio")),
                 communication_style=_text_or_none(body.get("communicationStyle")),
                 persona_context=_text_or_none(body.get("aiPersonaContext")),
+                time_zone=zone if zone not in _STARTING_TIME_ZONES else None,
+                language=_text_or_none(settings.get("language")),
             )
         self._cache[user_id] = (now, profile)
         return profile
 
+    def forget(self, user_id: UUID) -> None:
+        """Drops the cached profile, so the next prompt shows a change that was just made."""
+        self._cache.pop(user_id, None)
 
-class DealsClient:
-    """Deals shared by a workspace (workspace-service), as the acting user."""
+    async def _object(self, user_id: UUID, path: str) -> dict[str, Any] | None:
+        response = await self._http.get(f"{self._base_url}{path}", headers={"X-User-Id": str(user_id)}, timeout=5.0)
+        if response.status_code != 200 or not response.content:
+            return None
+        try:
+            body = response.json()
+        except ValueError:
+            return None
+        return body if isinstance(body, dict) else None
+
+
+class _ServiceClient:
+    """Calls to workspace-service as the acting user; its refusals and failures raise ``WorkspaceServiceError``."""
 
     def __init__(self, *, base_url: str, http: httpx.AsyncClient, timeout_seconds: float = 15.0) -> None:
         self._base_url = base_url.rstrip("/")
         self._http = http
         self._timeout = timeout_seconds
-
-    async def list(
-        self, user_id: UUID, workspace_id: UUID, *, query: str | None = None, stage: str | None = None,
-        mine: bool = False, limit: int = 50,
-    ) -> list[dict[str, Any]]:
-        params: dict[str, Any] = {"limit": limit, "mine": str(mine).lower()}
-        if query:
-            params["q"] = query
-        if stage:
-            params["stage"] = stage
-        body = await self._send("GET", f"/api/v1/workspaces/{workspace_id}/deals", user_id, params=params)
-        return [deal for deal in body or [] if isinstance(deal, dict)]
-
-    async def get(self, user_id: UUID, workspace_id: UUID, deal_id: UUID) -> dict[str, Any] | None:
-        return await self._send("GET", f"/api/v1/workspaces/{workspace_id}/deals/{deal_id}", user_id, missing_ok=True)
-
-    async def put(self, user_id: UUID, workspace_id: UUID, deal_id: UUID, body: dict[str, Any]) -> dict[str, Any]:
-        """Create (with this id) or replace a deal. With ``expected_version`` in ``body`` a stale
-        write fails with status 409 instead of overwriting someone else's change."""
-        return await self._send("PUT", f"/api/v1/workspaces/{workspace_id}/deals/{deal_id}", user_id, json=body)
-
-    async def delete(self, user_id: UUID, workspace_id: UUID, deal_id: UUID, *, expected_version: int | None = None) -> bool:
-        """``False`` if the deal was already gone."""
-        params = {"expected_version": expected_version} if expected_version is not None else None
-        found = await self._send(
-            "DELETE", f"/api/v1/workspaces/{workspace_id}/deals/{deal_id}", user_id, params=params, missing_ok=True, empty_ok=True
-        )
-        return found is not None
 
     async def _send(
         self, method: str, path: str, user_id: UUID, *, params: Any = None, json: Any = None,
@@ -257,8 +273,69 @@ class DealsClient:
             raise WorkspaceServiceError("workspace-service returned a non-JSON response", status=response.status_code) from exc
 
 
+class ProfileClient(_ServiceClient):
+    """The rep's own profile and settings, and how many profile changes they have left, as that rep."""
+
+    async def profile(self, user_id: UUID) -> dict[str, Any]:
+        return _as_object(await self._send("GET", "/api/v1/workspaces/profile", user_id, empty_ok=True))
+
+    async def preferences(self, user_id: UUID) -> dict[str, Any]:
+        return _as_object(await self._send("GET", "/api/v1/workspaces/profile/preferences", user_id, empty_ok=True))
+
+    async def limits(self, user_id: UUID) -> dict[str, Any]:
+        """``profile_saves`` and ``photo_changes``, each with ``limit``, ``used``, ``remaining`` and ``resets_at``."""
+        return _as_object(await self._send("GET", "/api/v1/workspaces/profile/limits", user_id, empty_ok=True))
+
+    async def save_profile(self, user_id: UUID, fields: dict[str, Any]) -> None:
+        """Saves the given fields (``first_name``, ``skills``, ...); the rest stay as they are. Uses one of the
+        rep's profile saves: 429 when none is left."""
+        await self._send("POST", "/api/v1/workspaces/profile", user_id, json=fields, empty_ok=True)
+
+    async def save_preferences(self, user_id: UUID, fields: dict[str, Any]) -> dict[str, Any]:
+        """Saves the given settings (``timezone``, ``language``, ``theme``) and returns all of them."""
+        return _as_object(await self._send("PUT", "/api/v1/workspaces/profile/preferences", user_id, json=fields, empty_ok=True))
+
+
+class DealsClient(_ServiceClient):
+    """Deals shared by a workspace (workspace-service), as the acting user."""
+
+    async def list(
+        self, user_id: UUID, workspace_id: UUID, *, query: str | None = None, stage: str | None = None,
+        mine: bool = False, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"limit": limit, "mine": str(mine).lower()}
+        if query:
+            params["q"] = query
+        if stage:
+            params["stage"] = stage
+        body = await self._send("GET", f"/api/v1/workspaces/{workspace_id}/deals", user_id, params=params)
+        return [deal for deal in body or [] if isinstance(deal, dict)]
+
+    async def get(self, user_id: UUID, workspace_id: UUID, deal_id: UUID) -> dict[str, Any] | None:
+        return await self._send("GET", f"/api/v1/workspaces/{workspace_id}/deals/{deal_id}", user_id, missing_ok=True)
+
+    async def put(self, user_id: UUID, workspace_id: UUID, deal_id: UUID, body: dict[str, Any]) -> dict[str, Any]:
+        """Create (with this id) or replace a deal. With ``expected_version`` in ``body`` a stale
+        write fails with status 409 instead of overwriting someone else's change."""
+        return await self._send("PUT", f"/api/v1/workspaces/{workspace_id}/deals/{deal_id}", user_id, json=body)
+
+    async def delete(self, user_id: UUID, workspace_id: UUID, deal_id: UUID, *, expected_version: int | None = None) -> bool:
+        """``False`` if the deal was already gone."""
+        params = {"expected_version": expected_version} if expected_version is not None else None
+        found = await self._send(
+            "DELETE", f"/api/v1/workspaces/{workspace_id}/deals/{deal_id}", user_id, params=params, missing_ok=True, empty_ok=True
+        )
+        return found is not None
+
+
 def _text_or_none(value: Any) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _as_object(body: Any) -> dict[str, Any]:
+    if not isinstance(body, dict):
+        raise WorkspaceServiceError("workspace-service returned an unexpected response")
+    return body
 
 
 def _message(response: httpx.Response) -> str:

@@ -20,11 +20,13 @@ import {
   PackagePlus,
   Receipt,
   RefreshCw,
+  Settings2,
   ShieldCheck,
   Tags,
   Trash2,
   Truck,
   Undo2,
+  UserPen,
   Warehouse,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -62,6 +64,8 @@ const KINDS: Record<string, { title: string; approve: string; icon: LucideIcon }
   knowledge_reclassify: { title: 'Classify this document again?', approve: 'Approve & classify', icon: Tags },
   knowledge_reindex: { title: 'Index this document again?', approve: 'Approve & re-index', icon: RefreshCw },
   knowledge_delete: { title: 'Delete this document?', approve: 'Approve & delete', icon: Trash2 },
+  profile_update: { title: 'Update your profile?', approve: 'Approve & update', icon: UserPen },
+  preferences_update: { title: 'Change your settings?', approve: 'Approve & change', icon: Settings2 },
   undo: { title: 'Undo these actions?', approve: 'Undo them', icon: Undo2 },
 };
 
