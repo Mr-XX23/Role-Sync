@@ -1,4 +1,5 @@
 import api from './axiosInstance';
+import { getActiveTenantId } from './catalogApi';
 
 export interface ConnectResponse {
   status: string;
@@ -7,18 +8,6 @@ export interface ConnectResponse {
   trigger_id: string;
   redirect_url?: string | null;
   connection_state?: string;
-}
-
-export interface ReconcileResponse {
-  status: string;
-  source: string;
-  tenant_id: string;
-  report: {
-    total_checked: number;
-    missed_deletions_found: number;
-    acl_drift_found: number;
-    corrections_applied: number;
-  };
 }
 
 export interface GmailConfig {
@@ -108,144 +97,138 @@ export interface GmailActivitiesResponse {
   activities: GmailActivity[];
 }
 
+/**
+ * Connections belong to the active workspace (like the catalog and the vault): every call names
+ * it, and data-pipeline checks the signed-in user is a member. Whose accounts are used comes from
+ * the session, so no call sends a user id.
+ */
+const inWorkspace = () => ({ headers: { 'X-Tenant-Id': getActiveTenantId() } });
+
 export const connectorApi = {
-  connectSource: async (source: string, userId: string, callbackUrl?: string): Promise<ConnectResponse> => {
-    const payload: { user_id: string; callback_url?: string } = {
-      user_id: userId,
-    };
+  connectSource: async (source: string, callbackUrl?: string): Promise<ConnectResponse> => {
+    const payload: { callback_url?: string } = {};
     if (callbackUrl) {
       payload.callback_url = callbackUrl;
     }
-    const response = await api.post<ConnectResponse>(`/connectors/${source}/connect`, payload);
-    return response.data;
-  },
-
-  reconcileSource: async (source: string, tenantId: string, liveDocs: any[] = []): Promise<ReconcileResponse> => {
-    const response = await api.post<ReconcileResponse>(`/connectors/${source}/reconcile`, {
-      tenant_id: tenantId,
-      live_docs: liveDocs,
-    });
+    const response = await api.post<ConnectResponse>(`/connectors/${source}/connect`, payload, inWorkspace());
     return response.data;
   },
 
   // Unified Status API for All 5 Connectors
-  getAllConnectorsStatus: async (userId: string = 'usr_active'): Promise<{ status: string; connections: Record<string, any> }> => {
-    const response = await api.get<{ status: string; connections: Record<string, any> }>(`/connectors/status?user_id=${userId}`);
+  getAllConnectorsStatus: async (): Promise<{ status: string; connections: Record<string, any> }> => {
+    const response = await api.get<{ status: string; connections: Record<string, any> }>(`/connectors/status`, inWorkspace());
     return response.data;
   },
 
   // Gmail Specific APIs
-  getGmailStatus: async (userId: string = 'usr_active'): Promise<GmailStatusResponse> => {
-    const response = await api.get<GmailStatusResponse>(`/connectors/gmail/status?user_id=${userId}`);
+  getGmailStatus: async (): Promise<GmailStatusResponse> => {
+    const response = await api.get<GmailStatusResponse>(`/connectors/gmail/status`, inWorkspace());
     return response.data;
   },
 
   saveGmailConfig: async (
-    userId: string,
     maxEmailsPerSync: number,
     categories: string[],
     syncWindowDays: number = 180,
     autoSyncIntervalMinutes: number = 30,
     syncFrequency: string = '30m'
   ): Promise<any> => {
-    const response = await api.post(`/connectors/gmail/config`, {
-      user_id: userId,
-      max_emails_per_sync: maxEmailsPerSync,
-      categories: categories,
-      sync_window_days: syncWindowDays,
-      auto_sync_interval_minutes: autoSyncIntervalMinutes,
-      sync_frequency: syncFrequency,
-    });
+    const response = await api.post(
+      `/connectors/gmail/config`,
+      {
+        max_emails_per_sync: maxEmailsPerSync,
+        categories: categories,
+        sync_window_days: syncWindowDays,
+        auto_sync_interval_minutes: autoSyncIntervalMinutes,
+        sync_frequency: syncFrequency,
+      },
+      inWorkspace()
+    );
     return response.data;
   },
 
   updateAutoSyncSchedule: async (
     source: string,
-    userId: string,
     syncFrequency: string,
     intervalMinutes?: number,
     autoSyncEnabled?: boolean,
     webhookEnabled?: boolean
   ): Promise<any> => {
-    const response = await api.post(`/connectors/${source.toLowerCase()}/auto-sync`, {
-      user_id: userId,
-      sync_frequency: syncFrequency,
-      interval_minutes: intervalMinutes,
-      auto_sync_enabled: autoSyncEnabled,
-      webhook_enabled: webhookEnabled,
-    });
+    const response = await api.post(
+      `/connectors/${source.toLowerCase()}/auto-sync`,
+      {
+        sync_frequency: syncFrequency,
+        interval_minutes: intervalMinutes,
+        auto_sync_enabled: autoSyncEnabled,
+        webhook_enabled: webhookEnabled,
+      },
+      inWorkspace()
+    );
     return response.data;
   },
 
-  triggerGmailSyncNow: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.post(`/connectors/gmail/sync-now`, {
-      user_id: userId,
-    });
+  triggerGmailSyncNow: async (): Promise<any> => {
+    const response = await api.post(`/connectors/gmail/sync-now`, undefined, inWorkspace());
     return response.data;
   },
 
-  triggerGmailResync: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.post(`/connectors/gmail/resync`, {
-      user_id: userId,
-    });
+  triggerGmailResync: async (): Promise<any> => {
+    const response = await api.post(`/connectors/gmail/resync`, undefined, inWorkspace());
     return response.data;
   },
 
-  getGmailActivities: async (userId: string = 'usr_active', limit: number = 20): Promise<GmailActivitiesResponse> => {
-    const response = await api.get<GmailActivitiesResponse>(`/connectors/gmail/activities?user_id=${userId}&limit=${limit}`);
+  getGmailActivities: async (limit: number = 20): Promise<GmailActivitiesResponse> => {
+    const response = await api.get<GmailActivitiesResponse>(`/connectors/gmail/activities?limit=${limit}`, inWorkspace());
     return response.data;
   },
 
   // Google Drive Specific APIs
-  getGDriveStatus: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.get<any>(`/connectors/gdrive/status?user_id=${userId}`);
+  getGDriveStatus: async (): Promise<any> => {
+    const response = await api.get<any>(`/connectors/gdrive/status`, inWorkspace());
     return response.data;
   },
 
   saveGDriveConfig: async (
-    userId: string,
     maxFilesPerSync: number,
     categories: string[],
     autoSyncIntervalMinutes: number = 30,
     syncFrequency: string = '30m'
   ): Promise<any> => {
-    const response = await api.post(`/connectors/gdrive/config`, {
-      user_id: userId,
-      max_files_per_sync: maxFilesPerSync,
-      categories: categories,
-      auto_sync_interval_minutes: autoSyncIntervalMinutes,
-      sync_frequency: syncFrequency,
-    });
+    const response = await api.post(
+      `/connectors/gdrive/config`,
+      {
+        max_files_per_sync: maxFilesPerSync,
+        categories: categories,
+        auto_sync_interval_minutes: autoSyncIntervalMinutes,
+        sync_frequency: syncFrequency,
+      },
+      inWorkspace()
+    );
     return response.data;
   },
 
-  triggerGDriveSyncNow: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.post(`/connectors/gdrive/sync-now`, {
-      user_id: userId,
-    });
+  triggerGDriveSyncNow: async (): Promise<any> => {
+    const response = await api.post(`/connectors/gdrive/sync-now`, undefined, inWorkspace());
     return response.data;
   },
 
-  triggerGDriveResync: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.post(`/connectors/gdrive/resync`, {
-      user_id: userId,
-    });
+  triggerGDriveResync: async (): Promise<any> => {
+    const response = await api.post(`/connectors/gdrive/resync`, undefined, inWorkspace());
     return response.data;
   },
 
-  getGDriveActivities: async (userId: string = 'usr_active', limit: number = 20): Promise<any> => {
-    const response = await api.get<any>(`/connectors/gdrive/activities?user_id=${userId}&limit=${limit}`);
+  getGDriveActivities: async (limit: number = 20): Promise<any> => {
+    const response = await api.get<any>(`/connectors/gdrive/activities?limit=${limit}`, inWorkspace());
     return response.data;
   },
 
   // Google Calendar Specific APIs
-  getCalendarStatus: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.get<any>(`/connectors/calendar/status?user_id=${userId}`);
+  getCalendarStatus: async (): Promise<any> => {
+    const response = await api.get<any>(`/connectors/calendar/status`, inWorkspace());
     return response.data;
   },
 
   saveCalendarConfig: async (
-    userId: string,
     maxEventsPerSync: number,
     categories: string[] = ['PRIMARY'],
     syncWindowDays: number = 180,
@@ -253,176 +236,159 @@ export const connectorApi = {
     autoSyncIntervalMinutes: number = 30,
     syncFrequency: string = '30m'
   ): Promise<any> => {
-    const response = await api.post(`/connectors/calendar/config`, {
-      user_id: userId,
-      max_events_per_sync: maxEventsPerSync,
-      categories: categories.length > 0 ? categories : ['PRIMARY'],
-      sync_window_days: syncWindowDays,
-      future_window_days: futureWindowDays,
-      auto_sync_interval_minutes: autoSyncIntervalMinutes,
-      sync_frequency: syncFrequency,
-    });
+    const response = await api.post(
+      `/connectors/calendar/config`,
+      {
+        max_events_per_sync: maxEventsPerSync,
+        categories: categories.length > 0 ? categories : ['PRIMARY'],
+        sync_window_days: syncWindowDays,
+        future_window_days: futureWindowDays,
+        auto_sync_interval_minutes: autoSyncIntervalMinutes,
+        sync_frequency: syncFrequency,
+      },
+      inWorkspace()
+    );
     return response.data;
   },
 
-  triggerCalendarSyncNow: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.post(`/connectors/calendar/sync-now`, {
-      user_id: userId,
-    });
+  triggerCalendarSyncNow: async (): Promise<any> => {
+    const response = await api.post(`/connectors/calendar/sync-now`, undefined, inWorkspace());
     return response.data;
   },
 
-  triggerCalendarResync: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.post(`/connectors/calendar/resync`, {
-      user_id: userId,
-    });
+  triggerCalendarResync: async (): Promise<any> => {
+    const response = await api.post(`/connectors/calendar/resync`, undefined, inWorkspace());
     return response.data;
   },
 
-  getCalendarActivities: async (userId: string = 'usr_active', limit: number = 20): Promise<any> => {
-    const response = await api.get<any>(`/connectors/calendar/activities?user_id=${userId}&limit=${limit}`);
+  getCalendarActivities: async (limit: number = 20): Promise<any> => {
+    const response = await api.get<any>(`/connectors/calendar/activities?limit=${limit}`, inWorkspace());
     return response.data;
   },
 
-  disconnectCalendar: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.post(`/connectors/calendar/disconnect`, {
-      user_id: userId,
-    });
+  disconnectCalendar: async (): Promise<any> => {
+    const response = await api.post(`/connectors/calendar/disconnect`, undefined, inWorkspace());
     return response.data;
   },
 
-  getSourceActivities: async (source: string, userId: string = 'usr_active', limit: number = 20): Promise<GmailActivitiesResponse> => {
-    const response = await api.get<GmailActivitiesResponse>(`/connectors/${source}/activities?user_id=${userId}&limit=${limit}`);
+  getSourceActivities: async (source: string, limit: number = 20): Promise<GmailActivitiesResponse> => {
+    const response = await api.get<GmailActivitiesResponse>(`/connectors/${source}/activities?limit=${limit}`, inWorkspace());
     return response.data;
   },
 
 
-  disconnectGmail: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.post(`/connectors/gmail/disconnect`, {
-      user_id: userId,
-    });
+  disconnectGmail: async (): Promise<any> => {
+    const response = await api.post(`/connectors/gmail/disconnect`, undefined, inWorkspace());
     return response.data;
   },
 
-  disconnectSource: async (source: string, userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.post(`/connectors/${source}/disconnect`, {
-      user_id: userId,
-    });
+  disconnectSource: async (source: string): Promise<any> => {
+    const response = await api.post(`/connectors/${source}/disconnect`, undefined, inWorkspace());
     return response.data;
   },
 
   // Slack Specific APIs
-  getSlackStatus: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.get<any>(`/connectors/slack/status?user_id=${userId}`);
+  getSlackStatus: async (): Promise<any> => {
+    const response = await api.get<any>(`/connectors/slack/status`, inWorkspace());
     return response.data;
   },
 
   saveSlackConfig: async (
-    userId: string,
     maxMessagesPerSync: number = 15,
     categories: string[] = ['PUBLIC_CHANNELS', 'DIRECT_MESSAGES', 'GROUP_MESSAGES'],
     autoSyncIntervalMinutes: number = 30,
     syncFrequency: string = '30m'
   ): Promise<any> => {
-    const response = await api.post(`/connectors/slack/config`, {
-      user_id: userId,
-      max_messages_per_sync: maxMessagesPerSync,
-      categories: categories.length > 0 ? categories : ['PUBLIC_CHANNELS', 'DIRECT_MESSAGES', 'GROUP_MESSAGES'],
-      auto_sync_interval_minutes: autoSyncIntervalMinutes,
-      sync_frequency: syncFrequency,
-    });
+    const response = await api.post(
+      `/connectors/slack/config`,
+      {
+        max_messages_per_sync: maxMessagesPerSync,
+        categories: categories.length > 0 ? categories : ['PUBLIC_CHANNELS', 'DIRECT_MESSAGES', 'GROUP_MESSAGES'],
+        auto_sync_interval_minutes: autoSyncIntervalMinutes,
+        sync_frequency: syncFrequency,
+      },
+      inWorkspace()
+    );
     return response.data;
   },
 
-  triggerSlackSyncNow: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.post(`/connectors/slack/sync-now`, {
-      user_id: userId,
-    });
+  triggerSlackSyncNow: async (): Promise<any> => {
+    const response = await api.post(`/connectors/slack/sync-now`, undefined, inWorkspace());
     return response.data;
   },
 
-  triggerSlackResync: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.post(`/connectors/slack/resync`, {
-      user_id: userId,
-    });
+  triggerSlackResync: async (): Promise<any> => {
+    const response = await api.post(`/connectors/slack/resync`, undefined, inWorkspace());
     return response.data;
   },
 
-  getSlackActivities: async (userId: string = 'usr_active', limit: number = 20): Promise<any> => {
-    const response = await api.get<any>(`/connectors/slack/activities?user_id=${userId}&limit=${limit}`);
+  getSlackActivities: async (limit: number = 20): Promise<any> => {
+    const response = await api.get<any>(`/connectors/slack/activities?limit=${limit}`, inWorkspace());
     return response.data;
   },
 
-  disconnectSlack: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.post(`/connectors/slack/disconnect`, {
-      user_id: userId,
-    });
+  disconnectSlack: async (): Promise<any> => {
+    const response = await api.post(`/connectors/slack/disconnect`, undefined, inWorkspace());
     return response.data;
   },
 
   // Notion Specific APIs
-  getNotionStatus: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.get<any>(`/connectors/notion/status?user_id=${userId}`);
+  getNotionStatus: async (): Promise<any> => {
+    const response = await api.get<any>(`/connectors/notion/status`, inWorkspace());
     return response.data;
   },
 
   saveNotionConfig: async (
-    userId: string,
     maxItemsPerSync: number = 15,
     categories: string[] = ['PAGES', 'DATABASES'],
     autoSyncIntervalMinutes: number = 30,
     syncFrequency: string = '30m'
   ): Promise<any> => {
-    const response = await api.post(`/connectors/notion/config`, {
-      user_id: userId,
-      max_items_per_sync: maxItemsPerSync,
-      categories: categories.length > 0 ? categories : ['PAGES', 'DATABASES'],
-      auto_sync_interval_minutes: autoSyncIntervalMinutes,
-      sync_frequency: syncFrequency,
-    });
+    const response = await api.post(
+      `/connectors/notion/config`,
+      {
+        max_items_per_sync: maxItemsPerSync,
+        categories: categories.length > 0 ? categories : ['PAGES', 'DATABASES'],
+        auto_sync_interval_minutes: autoSyncIntervalMinutes,
+        sync_frequency: syncFrequency,
+      },
+      inWorkspace()
+    );
     return response.data;
   },
 
-  triggerNotionSyncNow: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.post(`/connectors/notion/sync-now`, {
-      user_id: userId,
-    });
+  triggerNotionSyncNow: async (): Promise<any> => {
+    const response = await api.post(`/connectors/notion/sync-now`, undefined, inWorkspace());
     return response.data;
   },
 
-  triggerNotionResync: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.post(`/connectors/notion/resync`, {
-      user_id: userId,
-    });
+  triggerNotionResync: async (): Promise<any> => {
+    const response = await api.post(`/connectors/notion/resync`, undefined, inWorkspace());
     return response.data;
   },
 
-  getNotionActivities: async (userId: string = 'usr_active', limit: number = 20): Promise<any> => {
-    const response = await api.get<any>(`/connectors/notion/activities?user_id=${userId}&limit=${limit}`);
+  getNotionActivities: async (limit: number = 20): Promise<any> => {
+    const response = await api.get<any>(`/connectors/notion/activities?limit=${limit}`, inWorkspace());
     return response.data;
   },
 
-  disconnectNotion: async (userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.post(`/connectors/notion/disconnect`, {
-      user_id: userId,
-    });
+  disconnectNotion: async (): Promise<any> => {
+    const response = await api.post(`/connectors/notion/disconnect`, undefined, inWorkspace());
     return response.data;
   },
 
-  getSourceDataSummary: async (source: string, userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.get(`/connectors/${source}/data-summary?user_id=${userId}`);
+  getSourceDataSummary: async (source: string): Promise<any> => {
+    const response = await api.get(`/connectors/${source}/data-summary`, inWorkspace());
     return response.data;
   },
 
-  purgeSourceData: async (source: string, userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.delete(`/connectors/${source}/data?user_id=${userId}`);
+  purgeSourceData: async (source: string): Promise<any> => {
+    const response = await api.delete(`/connectors/${source}/data`, inWorkspace());
     return response.data;
   },
 
-  retryFailedItems: async (source: string, userId: string = 'usr_active'): Promise<any> => {
-    const response = await api.post(`/connectors/${source}/retry-failed`, {
-      user_id: userId,
-    });
+  retryFailedItems: async (source: string): Promise<any> => {
+    const response = await api.post(`/connectors/${source}/retry-failed`, undefined, inWorkspace());
     return response.data;
   },
 
@@ -436,25 +402,24 @@ export const connectorApi = {
       status: string;
       message: string;
       request: EnterpriseSyncRequestRecord;
-    }>('/connectors/enterprise-request', payload);
+    }>('/connectors/enterprise-request', payload, inWorkspace());
     return response.data;
   },
 
-  getEnterpriseSyncRequests: async (
-    userId: string = 'usr_active'
-  ): Promise<{ status: string; requests: EnterpriseSyncRequestRecord[] }> => {
+  getEnterpriseSyncRequests: async (): Promise<{ status: string; requests: EnterpriseSyncRequestRecord[] }> => {
     const response = await api.get<{ status: string; requests: EnterpriseSyncRequestRecord[] }>(
-      `/connectors/enterprise-requests?user_id=${userId}`
+      `/connectors/enterprise-requests`,
+      inWorkspace()
     );
     return response.data;
   },
 
   cancelEnterpriseSyncRequest: async (
-    requestId: string,
-    userId: string = 'usr_active'
+    requestId: string
   ): Promise<{ status: string; message: string; cancelled: boolean }> => {
     const response = await api.delete<{ status: string; message: string; cancelled: boolean }>(
-      `/connectors/enterprise-requests/${requestId}?user_id=${userId}`
+      `/connectors/enterprise-requests/${requestId}`,
+      inWorkspace()
     );
     return response.data;
   },
@@ -463,7 +428,6 @@ export const connectorApi = {
 export interface EnterpriseSyncRequestPayload {
   database_system: string;
   requirements: string;
-  user_id?: string;
   contact_email?: string;
 }
 
@@ -481,4 +445,3 @@ export interface EnterpriseSyncRequestRecord {
 }
 
 export default connectorApi;
-

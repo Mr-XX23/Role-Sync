@@ -16,6 +16,7 @@ from module_1_document_processing.composio_connector.gdrive_models import (
     GDriveSyncActivity,
 )
 from module_1_document_processing.composio_connector.gdrive_store import GDriveStore
+from module_1_document_processing.composio_connector.workspace_scope import workspace_connections
 from module_1_document_processing.composio_connector.normalizers.gdrive_normalizer import normalize_gdrive
 from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent, EventType
 from module_1_document_processing.composio_connector.date_utils import normalize_to_utc, ensure_iso_str
@@ -708,16 +709,25 @@ class GDriveSyncManager:
             print(f"[GDriveSyncManager] Error executing GOOGLEDRIVE_LIST_FILES: {err}")
             return [], None
 
-    async def process_webhook_event(self, event: CanonicalEvent, raw_payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Processes real-time Google Drive file webhook events."""
+    async def process_webhook_event(
+        self,
+        event: CanonicalEvent,
+        raw_payload: dict[str, Any] | None = None,
+        connection: GDriveConnection | None = None,
+    ) -> dict[str, Any]:
+        """Processes real-time Google Drive file webhook events.
+
+        ``connection`` pins the event to that connection: nothing else is looked up, so
+        an event simulated by a signed-in member can't reach another user's connection.
+        """
         user_id = event.user_id
-        conn = None
-        if user_id:
+        conn = connection
+        if conn is None and user_id:
             conn = self.store.get_or_create_connection(tenant_id=event.tenant_id, user_id=user_id)
 
         # If user_id wasn't in event or webhook is disabled on the retrieved connection,
         # lookup active connection matching the trigger or single active connection
-        if not conn or not getattr(conn.config, "webhook_enabled", False):
+        if connection is None and (not conn or not getattr(conn.config, "webhook_enabled", False)):
             active_conns = self.store.list_all_active_connections()
             wh_conns = [c for c in active_conns if getattr(c.config, "webhook_enabled", False)]
             if wh_conns:
@@ -906,7 +916,7 @@ class GDriveSyncManager:
                 # Periodic tick every 20 seconds for responsive auto-sync triggers
                 await asyncio.sleep(20)
                 now = datetime.now(timezone.utc)
-                active_connections = self.store.list_all_active_connections()
+                active_connections = workspace_connections(self.store.list_all_active_connections(), "GDriveSyncManager")
 
                 for conn in active_connections:
                     # Only run auto-sync for connected tools in ready states

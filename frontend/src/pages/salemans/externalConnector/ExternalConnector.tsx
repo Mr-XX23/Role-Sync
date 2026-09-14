@@ -344,7 +344,7 @@ export const ExternalConnector: React.FC = () => {
   // Fetch real status for ALL 5 connectors from backend
   const fetchAllConnectorsStatus = async () => {
     try {
-      const res = await connectorApi.getAllConnectorsStatus(activeUserId);
+      const res = await connectorApi.getAllConnectorsStatus();
       if (res?.connections) {
         const conns = res.connections;
         setAllConnections(conns);
@@ -468,7 +468,7 @@ export const ExternalConnector: React.FC = () => {
 
       // Fetch submitted custom enterprise requests
       try {
-        const entRes = await connectorApi.getEnterpriseSyncRequests(activeUserId);
+        const entRes = await connectorApi.getEnterpriseSyncRequests();
         if (entRes?.requests) {
           setEnterpriseRequests(entRes.requests);
           localStorage.setItem(`rolesync_enterprise_requests_${activeUserId}`, JSON.stringify(entRes.requests));
@@ -693,7 +693,7 @@ export const ExternalConnector: React.FC = () => {
         localStorage.setItem('rolesync_oauth_connecting_source', 'gmail');
         try {
           const callbackUrl = `${window.location.origin}/connectors/callback?source=gmail`;
-          const res = await connectorApi.connectSource('gmail', activeUserId, callbackUrl);
+          const res = await connectorApi.connectSource('gmail', callbackUrl);
 
           if (res.redirect_url) {
             const popup = openOAuthPopup(res.redirect_url);
@@ -716,7 +716,7 @@ export const ExternalConnector: React.FC = () => {
 
                 // Check final status upon close
                 try {
-                  const statusRes = await connectorApi.getGmailStatus(activeUserId);
+                  const statusRes = await connectorApi.getGmailStatus();
                   if (statusRes?.connection && isAuthorizedState(statusRes.connection.status)) {
                     hasHandledAuthSuccessRef.current = true;
                     await fetchAllConnectorsStatus();
@@ -753,7 +753,7 @@ export const ExternalConnector: React.FC = () => {
                 }
 
                 try {
-                  const statusRes = await connectorApi.getGmailStatus(activeUserId);
+                  const statusRes = await connectorApi.getGmailStatus();
                   if (statusRes?.connection && isAuthorizedState(statusRes.connection.status)) {
                     hasHandledAuthSuccessRef.current = true;
                     if (popupWatcherRef.current) clearInterval(popupWatcherRef.current);
@@ -800,7 +800,7 @@ export const ExternalConnector: React.FC = () => {
         localStorage.setItem('rolesync_oauth_connecting_source', 'gdrive');
         try {
           const callbackUrl = `${window.location.origin}/connectors/callback?source=gdrive`;
-          const res = await connectorApi.connectSource('gdrive', activeUserId, callbackUrl);
+          const res = await connectorApi.connectSource('gdrive', callbackUrl);
 
           if (res.redirect_url) {
             const popup = openOAuthPopup(res.redirect_url);
@@ -820,7 +820,7 @@ export const ExternalConnector: React.FC = () => {
                 }
 
                 try {
-                  const statusRes = await connectorApi.getGDriveStatus(activeUserId);
+                  const statusRes = await connectorApi.getGDriveStatus();
                   if (statusRes?.connection && isAuthorizedState(statusRes.connection.status)) {
                     hasHandledAuthSuccessRef.current = true;
                     await fetchAllConnectorsStatus();
@@ -856,7 +856,7 @@ export const ExternalConnector: React.FC = () => {
                 }
 
                 try {
-                  const statusRes = await connectorApi.getGDriveStatus(activeUserId);
+                  const statusRes = await connectorApi.getGDriveStatus();
                   if (statusRes?.connection && isAuthorizedState(statusRes.connection.status)) {
                     hasHandledAuthSuccessRef.current = true;
                     if (popupWatcherRef.current) clearInterval(popupWatcherRef.current);
@@ -901,7 +901,7 @@ export const ExternalConnector: React.FC = () => {
         localStorage.setItem('rolesync_oauth_connecting_source', 'calendar');
         try {
           const callbackUrl = `${window.location.origin}/connectors/callback?source=calendar`;
-          const res = await connectorApi.connectSource('calendar', activeUserId, callbackUrl);
+          const res = await connectorApi.connectSource('calendar', callbackUrl);
 
           if (res.redirect_url) {
             const popup = openOAuthPopup(res.redirect_url);
@@ -921,7 +921,7 @@ export const ExternalConnector: React.FC = () => {
                 }
 
                 try {
-                  const statusRes = await connectorApi.getCalendarStatus(activeUserId);
+                  const statusRes = await connectorApi.getCalendarStatus();
                   if (statusRes?.connection && isAuthorizedState(statusRes.connection.status)) {
                     hasHandledAuthSuccessRef.current = true;
                     await fetchAllConnectorsStatus();
@@ -957,7 +957,7 @@ export const ExternalConnector: React.FC = () => {
                 }
 
                 try {
-                  const statusRes = await connectorApi.getCalendarStatus(activeUserId);
+                  const statusRes = await connectorApi.getCalendarStatus();
                   if (statusRes?.connection && isAuthorizedState(statusRes.connection.status)) {
                     hasHandledAuthSuccessRef.current = true;
                     if (popupWatcherRef.current) clearInterval(popupWatcherRef.current);
@@ -1004,7 +1004,7 @@ export const ExternalConnector: React.FC = () => {
         localStorage.setItem('rolesync_oauth_connecting_source', 'slack');
         try {
           const callbackUrl = `${window.location.origin}/connectors/callback?source=slack`;
-          const res = await connectorApi.connectSource('slack', activeUserId, callbackUrl);
+          const res = await connectorApi.connectSource('slack', callbackUrl);
 
           if (res.redirect_url) {
             const popup = openOAuthPopup(res.redirect_url);
@@ -1024,7 +1024,7 @@ export const ExternalConnector: React.FC = () => {
                 }
 
                 try {
-                  const statusRes = await connectorApi.getSlackStatus(activeUserId);
+                  const statusRes = await connectorApi.getSlackStatus();
                   if (statusRes?.connection && isAuthorizedState(statusRes.connection.status)) {
                     hasHandledAuthSuccessRef.current = true;
                     await fetchAllConnectorsStatus();
@@ -1060,7 +1060,7 @@ export const ExternalConnector: React.FC = () => {
                 }
 
                 try {
-                  const statusRes = await connectorApi.getSlackStatus(activeUserId);
+                  const statusRes = await connectorApi.getSlackStatus();
                   if (statusRes?.connection && isAuthorizedState(statusRes.connection.status)) {
                     hasHandledAuthSuccessRef.current = true;
                     if (popupWatcherRef.current) clearInterval(popupWatcherRef.current);
@@ -1105,7 +1105,7 @@ export const ExternalConnector: React.FC = () => {
         localStorage.setItem('rolesync_oauth_connecting_source', 'notion');
         try {
           const callbackUrl = `${window.location.origin}/connectors/callback?source=notion`;
-          const res = await connectorApi.connectSource('notion', activeUserId, callbackUrl);
+          const res = await connectorApi.connectSource('notion', callbackUrl);
 
           if (res.redirect_url) {
             const popup = openOAuthPopup(res.redirect_url);
@@ -1125,7 +1125,7 @@ export const ExternalConnector: React.FC = () => {
                 }
 
                 try {
-                  const statusRes = await connectorApi.getNotionStatus(activeUserId);
+                  const statusRes = await connectorApi.getNotionStatus();
                   if (statusRes?.connection && isAuthorizedState(statusRes.connection.status)) {
                     hasHandledAuthSuccessRef.current = true;
                     await fetchAllConnectorsStatus();
@@ -1161,7 +1161,7 @@ export const ExternalConnector: React.FC = () => {
                 }
 
                 try {
-                  const statusRes = await connectorApi.getNotionStatus(activeUserId);
+                  const statusRes = await connectorApi.getNotionStatus();
                   if (statusRes?.connection && isAuthorizedState(statusRes.connection.status)) {
                     hasHandledAuthSuccessRef.current = true;
                     if (popupWatcherRef.current) clearInterval(popupWatcherRef.current);
@@ -1204,7 +1204,7 @@ export const ExternalConnector: React.FC = () => {
       localStorage.setItem('rolesync_oauth_connecting_source', id);
       try {
         const callbackUrl = `${window.location.origin}/connectors/callback?source=${id}`;
-        const res = await connectorApi.connectSource(id, activeUserId, callbackUrl);
+        const res = await connectorApi.connectSource(id, callbackUrl);
 
         if (res.redirect_url) {
           const popup = openOAuthPopup(res.redirect_url);
@@ -1250,10 +1250,10 @@ export const ExternalConnector: React.FC = () => {
     try {
       // 1. Call backend API to revoke & invalidate OAuth token in Composio
       if (targetId === 'gmail') {
-        await connectorApi.disconnectGmail(activeUserId);
+        await connectorApi.disconnectGmail();
         await fetchAllConnectorsStatus();
       } else {
-        await connectorApi.disconnectSource(targetId, activeUserId);
+        await connectorApi.disconnectSource(targetId);
       }
 
       // 2. Wipe local cached credentials and connection flags
@@ -1307,7 +1307,7 @@ export const ExternalConnector: React.FC = () => {
 
     if (id === 'gmail') {
       try {
-        await connectorApi.triggerGmailSyncNow(activeUserId);
+        await connectorApi.triggerGmailSyncNow();
         toast.info('Manual sync batch started for Gmail.', 'Sync Initiated');
         await fetchAllConnectorsStatus();
       } catch (err: any) {
@@ -1327,7 +1327,7 @@ export const ExternalConnector: React.FC = () => {
 
     if (id === 'gdrive') {
       try {
-        await connectorApi.triggerGDriveSyncNow(activeUserId);
+        await connectorApi.triggerGDriveSyncNow();
         toast.info('Manual sync batch started for Google Drive.', 'Sync Initiated');
         await fetchAllConnectorsStatus();
       } catch (err: any) {
@@ -1347,7 +1347,7 @@ export const ExternalConnector: React.FC = () => {
 
     if (id === 'calendar') {
       try {
-        await connectorApi.triggerCalendarSyncNow(activeUserId);
+        await connectorApi.triggerCalendarSyncNow();
         toast.info('Manual sync batch started for Google Calendar.', 'Sync Initiated');
         await fetchAllConnectorsStatus();
       } catch (err: any) {
@@ -1367,7 +1367,7 @@ export const ExternalConnector: React.FC = () => {
 
     if (id === 'slack') {
       try {
-        await connectorApi.triggerSlackSyncNow(activeUserId);
+        await connectorApi.triggerSlackSyncNow();
         toast.info('Manual sync batch started for Slack.', 'Sync Initiated');
         await fetchAllConnectorsStatus();
       } catch (err: any) {
@@ -1387,7 +1387,7 @@ export const ExternalConnector: React.FC = () => {
 
     if (id === 'notion') {
       try {
-        await connectorApi.triggerNotionSyncNow(activeUserId);
+        await connectorApi.triggerNotionSyncNow();
         toast.info('Manual sync batch started for Notion.', 'Sync Initiated');
         await fetchAllConnectorsStatus();
       } catch (err: any) {
@@ -1404,24 +1404,13 @@ export const ExternalConnector: React.FC = () => {
       }
       return;
     }
-
-    try {
-      await connectorApi.reconcileSource(id, 'tenant_default');
-      toast.info(`Reconciliation sync started for ${id}.`, 'Sync Initiated');
-      await fetchAllConnectorsStatus();
-    } catch (err: any) {
-      setActiveSyncingId(null);
-      console.error(`[Frontend] Manual sync failed for ${id}:`, err);
-      toast.error(`Sync failed for ${id}.`, 'Sync Failed');
-      await fetchAllConnectorsStatus();
-    }
   };
 
   // Retry Failed Items for a Connector
   const handleRetryFailed = async (id: string, name: string) => {
     setRetryingFailedId(id);
     try {
-      const res = await connectorApi.retryFailedItems(id, activeUserId);
+      const res = await connectorApi.retryFailedItems(id);
       if (res?.retried_count !== undefined) {
         toast.info(`Retrying ${res.retried_count} failed item(s) for ${name}.`, 'Retry Initiated');
       } else {
@@ -1457,7 +1446,7 @@ export const ExternalConnector: React.FC = () => {
 
     if (connId === 'gmail') {
       try {
-        await connectorApi.saveGmailConfig(activeUserId, maxItems, categories);
+        await connectorApi.saveGmailConfig(maxItems, categories);
         await fetchAllConnectorsStatus();
         toast.info('Initial synchronization initiated. Processing email batch in background...', 'Syncing Started');
       } catch (err: any) {
@@ -1468,7 +1457,7 @@ export const ExternalConnector: React.FC = () => {
       }
     } else if (connId === 'gdrive') {
       try {
-        await connectorApi.saveGDriveConfig(activeUserId, maxItems, categories);
+        await connectorApi.saveGDriveConfig(maxItems, categories);
         await fetchAllConnectorsStatus();
         toast.info('Initial synchronization initiated. Processing Google Drive documents in background...', 'Syncing Started');
       } catch (err: any) {
@@ -1479,7 +1468,7 @@ export const ExternalConnector: React.FC = () => {
       }
     } else if (connId === 'calendar') {
       try {
-        await connectorApi.saveCalendarConfig(activeUserId, maxItems, categories.length > 0 ? categories : ['PRIMARY']);
+        await connectorApi.saveCalendarConfig(maxItems, categories.length > 0 ? categories : ['PRIMARY']);
         await fetchAllConnectorsStatus();
         toast.info('Initial synchronization initiated. Processing Google Calendar events (Phase 1: Future 1-Year, Phase 2: Historical 180 Days)...', 'Syncing Started');
       } catch (err: any) {
@@ -1491,7 +1480,6 @@ export const ExternalConnector: React.FC = () => {
     } else if (connId === 'slack') {
       try {
         await connectorApi.saveSlackConfig(
-          activeUserId,
           maxItems,
           categories.length > 0 ? categories : ['PUBLIC_CHANNELS', 'DIRECT_MESSAGES', 'GROUP_MESSAGES']
         );
@@ -1506,7 +1494,6 @@ export const ExternalConnector: React.FC = () => {
     } else if (connId === 'notion') {
       try {
         await connectorApi.saveNotionConfig(
-          activeUserId,
           maxItems,
           categories.length > 0 ? categories : ['PAGES', 'DATABASES']
         );
@@ -1535,7 +1522,6 @@ export const ExternalConnector: React.FC = () => {
 
     await connectorApi.updateAutoSyncSchedule(
       connId,
-      activeUserId,
       freq,
       intervalMinutes,
       autoSyncEnabled,
@@ -1582,7 +1568,6 @@ export const ExternalConnector: React.FC = () => {
       const res = await connectorApi.requestEnterpriseSync({
         database_system: dbName,
         requirements: requirements,
-        user_id: activeUserId,
         contact_email: user?.email,
       });
 
@@ -1639,7 +1624,7 @@ export const ExternalConnector: React.FC = () => {
   const handleCancelEnterpriseRequest = async (requestId: string, systemName: string) => {
     setCancellingRequestId(requestId);
     try {
-      await connectorApi.cancelEnterpriseSyncRequest(requestId, activeUserId);
+      await connectorApi.cancelEnterpriseSyncRequest(requestId);
     } catch (e) {
       console.warn('Could not cancel enterprise request on server:', e);
     } finally {
@@ -2228,7 +2213,6 @@ export const ExternalConnector: React.FC = () => {
             setShowActivityModal(false);
             setSelectedActivityConnector(null);
           }}
-          userId={activeUserId}
           source={selectedActivityConnector.id}
           sourceName={selectedActivityConnector.name}
           logoUrl={selectedActivityConnector.logoUrl}
