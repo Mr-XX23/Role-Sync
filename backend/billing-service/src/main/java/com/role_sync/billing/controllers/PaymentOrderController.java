@@ -3,6 +3,8 @@ package com.role_sync.billing.controllers;
 import com.role_sync.billing.dto.PaymentOrderResponse;
 import com.role_sync.billing.models.PaymentOrder;
 import com.role_sync.billing.repository.PaymentOrderRepository;
+import com.role_sync.billing.security.WorkspaceMembershipGuard;
+import com.role_sync.billing.services.BillingException;
 import com.role_sync.billing.utils.CallerIdentity;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -18,19 +20,19 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Purchase history and order status.
- *
- * <p>The dashboard polls a single order after the buyer returns from the gateway,
- * because the redirect itself proves nothing; only the webhook settles an order.
+ * Purchase history and order status. The success page polls one order after the buyer returns
+ * from Stripe, because the redirect proves nothing; only the webhook settles an order.
  */
 @RestController
 @RequestMapping("/api/v1/billing")
 public class PaymentOrderController {
 
 	private final PaymentOrderRepository orders;
+	private final WorkspaceMembershipGuard membership;
 
-	public PaymentOrderController(PaymentOrderRepository orders) {
+	public PaymentOrderController(PaymentOrderRepository orders, WorkspaceMembershipGuard membership) {
 		this.orders = orders;
+		this.membership = membership;
 	}
 
 	@GetMapping("/orders/{orderId}")
@@ -39,16 +41,17 @@ public class PaymentOrderController {
 			@PathVariable UUID orderId) {
 
 		UUID userId = CallerIdentity.requireUserId(userIdHeader);
-
 		PaymentOrder order = orders.findById(orderId)
 				.orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found"));
 
-		// Deliberately a 404 rather than a 403, so this cannot be used to discover
-		// which order ids exist.
-		if (!order.getUserId().equals(userId)) {
+		// Only members of the buying workspace may see it; everyone else gets the same 404 as a
+		// missing order, so order ids can't be probed.
+		try {
+			membership.requireMember(userId, order.getAccountId());
+		}
+		catch (BillingException notMember) {
 			throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
 		}
-
 		return ResponseEntity.ok(PaymentOrderResponse.from(order));
 	}
 
@@ -60,12 +63,10 @@ public class PaymentOrderController {
 
 		UUID userId = CallerIdentity.requireUserId(userIdHeader);
 		UUID accountId = CallerIdentity.requireWorkspaceId(tenantHeader, workspaceId);
+		membership.requireMember(userId, accountId);
 
-		List<PaymentOrderResponse> result =
-				orders.findTop50ByAccountIdAndUserIdOrderByCreatedAtDesc(accountId, userId).stream()
-						.map(PaymentOrderResponse::from)
-						.toList();
-
-		return ResponseEntity.ok(result);
+		return ResponseEntity.ok(orders.findTop50ByAccountIdOrderByCreatedAtDesc(accountId).stream()
+				.map(PaymentOrderResponse::from)
+				.toList());
 	}
 }

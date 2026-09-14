@@ -3,6 +3,7 @@ package com.role_sync.billing.controllers;
 import com.role_sync.billing.dto.CheckoutRequest;
 import com.role_sync.billing.dto.PaymentOrderResponse;
 import com.role_sync.billing.models.PaymentOrder;
+import com.role_sync.billing.security.WorkspaceMembershipGuard;
 import com.role_sync.billing.services.CheckoutService;
 import com.role_sync.billing.utils.CallerIdentity;
 import jakarta.validation.Valid;
@@ -15,15 +16,20 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
 
-/** Starts a credit purchase and hands back a hosted checkout URL. */
+/**
+ * Starts a credit purchase and hands back a hosted checkout URL. Only a signed-in member of the
+ * workspace can buy credits for it.
+ */
 @RestController
 @RequestMapping("/api/v1/billing")
 public class CheckoutController {
 
 	private final CheckoutService checkoutService;
+	private final WorkspaceMembershipGuard membership;
 
-	public CheckoutController(CheckoutService checkoutService) {
+	public CheckoutController(CheckoutService checkoutService, WorkspaceMembershipGuard membership) {
 		this.checkoutService = checkoutService;
+		this.membership = membership;
 	}
 
 	@PostMapping("/checkout")
@@ -35,6 +41,7 @@ public class CheckoutController {
 
 		UUID userId = CallerIdentity.requireUserId(userIdHeader);
 		UUID workspaceId = CallerIdentity.requireWorkspaceId(tenantHeader, request.workspaceId());
+		membership.requireMember(userId, workspaceId);
 
 		PaymentOrder order = checkoutService.start(
 				userId,

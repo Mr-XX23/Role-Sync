@@ -62,6 +62,13 @@
 			<artifactId>stripe-java</artifactId>
 			<version>${stripe.version}</version>
 		</dependency>
+		<!-- Webhook payloads and usage details are read and written with Gson (shipped with
+		     stripe-java at runtime) instead of an injected Jackson 2 mapper, which Spring Boot 4 no
+		     longer provides as a bean. -->
+		<dependency>
+			<groupId>com.google.code.gson</groupId>
+			<artifactId>gson</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.projectlombok</groupId>
 			<artifactId>lombok</artifactId>
@@ -75,6 +82,11 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-data-jpa-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>com.h2database</groupId>
+			<artifactId>h2</artifactId>
 			<scope>test</scope>
 		</dependency>
 	</dependencies>

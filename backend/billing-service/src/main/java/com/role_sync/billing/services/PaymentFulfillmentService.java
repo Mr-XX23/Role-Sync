@@ -20,16 +20,14 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Turns a verified webhook into an order state change and, when money settled, a
- * credit grant.
+ * Turns a verified webhook into an order state change and, when money settled, credits.
  *
- * <p>This is the only place an order becomes SUCCEEDED. The redirect the buyer
- * lands on is treated as cosmetic: a browser return is trivially forgeable, so
- * fulfilment happens here, driven by a signed provider callback.
+ * <p>This is the only place an order becomes SUCCEEDED. The redirect the buyer lands on is treated
+ * as cosmetic: a browser return is trivially forgeable, so fulfilment happens here, driven by a
+ * signed provider callback.
  *
- * <p>Three things make it safe to call repeatedly, which matters because every
- * gateway retries: the event id is unique, only a non-terminal order transitions,
- * and the grant is unique per order.
+ * <p>It is safe to call repeatedly, which matters because every gateway retries: the event id is
+ * unique, only a non-terminal order transitions, and the ledger credits an order once.
  */
 @Service
 public class PaymentFulfillmentService {
@@ -39,13 +37,16 @@ public class PaymentFulfillmentService {
 	private final PaymentOrderRepository orders;
 	private final PaymentEventRepository events;
 	private final CreditGrantRepository grants;
+	private final CreditLedgerService ledger;
 
 	public PaymentFulfillmentService(PaymentOrderRepository orders,
 	                                 PaymentEventRepository events,
-	                                 CreditGrantRepository grants) {
+	                                 CreditGrantRepository grants,
+	                                 CreditLedgerService ledger) {
 		this.orders = orders;
 		this.events = events;
 		this.grants = grants;
+		this.ledger = ledger;
 	}
 
 	@Transactional
@@ -98,9 +99,8 @@ public class PaymentFulfillmentService {
 			return "conflict: order already " + order.getStatus();
 		}
 
-		// Cross-check what the gateway says was charged against what we asked for.
-		// A mismatch means a tampered or misconfigured checkout, so we refuse to
-		// grant credits and leave it for a human.
+		// Cross-check what the gateway says was charged against what we asked for. A mismatch
+		// means a tampered or misconfigured checkout, so no credits are added.
 		if (outcome.amountMinor() > 0 && outcome.amountMinor() != order.getAmountMinor()) {
 			log.error("Amount mismatch on order {}: expected {} {}, provider reported {} {}",
 					order.getId(), order.getAmountMinor(), order.getCurrency(),
@@ -127,21 +127,22 @@ public class PaymentFulfillmentService {
 		order.setFailureReason(null);
 		orders.save(order);
 
-		// The grant is the handover to the credit domain. Unique per order, so a
-		// replayed webhook cannot grant twice.
-		if (grants.existsByOrderId(order.getId())) {
-			return "settled; grant already present";
+		boolean credited = ledger.creditPurchase(order.getAccountId(), order.getCredits(), order.getUserId(), order.getId());
+		if (!grants.existsByOrderId(order.getId())) {
+			grants.save(CreditGrant.builder()
+					.orderId(order.getId())
+					.accountId(order.getAccountId())
+					.userId(order.getUserId())
+					.credits(order.getCredits())
+					.status(GrantStatus.APPLIED)
+					.appliedAt(Instant.now())
+					.build());
 		}
-		grants.save(CreditGrant.builder()
-				.orderId(order.getId())
-				.accountId(order.getAccountId())
-				.userId(order.getUserId())
-				.credits(order.getCredits())
-				.status(GrantStatus.PENDING)
-				.build());
 
-		log.info("Order {} settled; queued grant of {} credits to account {}",
-				order.getId(), order.getCredits(), order.getAccountId());
+		if (!credited) {
+			return "settled; credits already added";
+		}
+		log.info("Order {} settled; added {} credits to workspace {}", order.getId(), order.getCredits(), order.getAccountId());
 		return "granted " + order.getCredits() + " credits";
 	}
 
@@ -161,11 +162,9 @@ public class PaymentFulfillmentService {
 		}
 		order.setStatus(PaymentStatus.REFUNDED);
 		orders.save(order);
-		// Reclaiming already-spent credits is a ledger decision, not a payment one,
-		// so it is deliberately left to the credit system.
-		log.warn("Order {} refunded; credit clawback for account {} is pending the credit ledger",
-				order.getId(), order.getAccountId());
-		return "refunded";
+		boolean clawed = ledger.clawBackPurchase(order.getAccountId(), order.getCredits(), order.getId());
+		log.warn("Order {} refunded; removed {} credits from workspace {}", order.getId(), order.getCredits(), order.getAccountId());
+		return clawed ? "refunded; credits removed" : "refunded; credits already removed";
 	}
 
 	private Optional<PaymentOrder> resolveOrder(WebhookOutcome outcome) {

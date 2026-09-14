@@ -101,7 +101,8 @@ public class CheckoutService {
 				pkg.getPriceMinor(),
 				order.getCurrency(),
 				key,
-				properties.getSuccessUrl(),
+				// The success page polls this order, so it needs to know which one it came back from.
+				withOrderId(properties.getSuccessUrl(), order.getId()),
 				properties.getCancelUrl());
 
 		try {
@@ -118,6 +119,10 @@ public class CheckoutService {
 			log.error("Checkout could not be opened for order {}: {}", order.getId(), ex.getMessage());
 			throw ex;
 		}
+	}
+
+	static String withOrderId(String url, UUID orderId) {
+		return url + (url.contains("?") ? "&" : "?") + "orderId=" + orderId;
 	}
 
 	private String resolveKey(UUID accountId, String packageCode, String idempotencyKey) {

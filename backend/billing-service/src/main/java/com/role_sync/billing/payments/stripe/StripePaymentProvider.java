@@ -1,7 +1,8 @@
 package com.role_sync.billing.payments.stripe;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.role_sync.billing.configurations.BillingProperties;
 import com.role_sync.billing.models.PaymentProviderKey;
 import com.role_sync.billing.payments.CheckoutCommand;
@@ -23,10 +24,12 @@ import org.springframework.stereotype.Component;
 /**
  * Stripe gateway, implemented with Stripe Checkout.
  *
- * <p>Checkout is a hosted page, so card details never reach our servers and we
- * stay out of PCI scope. We create the session with a dynamic price built from
- * our own configured package, rather than a Stripe Price object, so pricing stays
- * owned by this platform and not duplicated in the Stripe dashboard.
+ * <p>Checkout is a hosted page, so card details never reach our servers. The session carries a
+ * dynamic price built from our own configured package, so pricing stays owned by this platform.
+ *
+ * <p>Webhook payloads are read with Gson, which stripe-java already ships, rather than an injected
+ * Jackson mapper: Spring Boot 4 configures Jackson 3, and depending on a Jackson 2 bean here would
+ * fail at startup.
  */
 @Component
 public class StripePaymentProvider implements PaymentProvider {
@@ -39,11 +42,9 @@ public class StripePaymentProvider implements PaymentProvider {
 	static final String METADATA_CREDITS = "credits";
 
 	private final BillingProperties properties;
-	private final ObjectMapper objectMapper;
 
-	public StripePaymentProvider(BillingProperties properties, ObjectMapper objectMapper) {
+	public StripePaymentProvider(BillingProperties properties) {
 		this.properties = properties;
-		this.objectMapper = objectMapper;
 	}
 
 	@Override
@@ -94,8 +95,8 @@ public class StripePaymentProvider implements PaymentProvider {
 								.build())
 				.build();
 
-		// The idempotency key means a retried checkout call reuses the same session
-		// instead of creating a second one the buyer could also pay.
+		// The idempotency key means a retried checkout call reuses the same session instead of
+		// creating a second one the buyer could also pay.
 		RequestOptions options = RequestOptions.builder()
 				.setApiKey(properties.getStripe().getSecretKey())
 				.setIdempotencyKey(command.idempotencyKey())
@@ -124,33 +125,38 @@ public class StripePaymentProvider implements PaymentProvider {
 
 		final Event event;
 		try {
-			// Verifies the HMAC over the exact raw bytes and enforces the timestamp
-			// tolerance, which is what makes a forged or replayed request fail here.
+			// Verifies the HMAC over the exact raw bytes and enforces the timestamp tolerance,
+			// which is what makes a forged or replayed request fail here.
 			event = Webhook.constructEvent(rawBody, signatureHeader, secret);
 		}
 		catch (Exception ex) {
 			throw new PaymentProviderException("Stripe signature verification failed", ex);
 		}
 
-		JsonNode object;
+		JsonObject object;
 		try {
-			object = objectMapper.readTree(rawBody).path("data").path("object");
+			object = JsonParser.parseString(rawBody).getAsJsonObject()
+					.getAsJsonObject("data")
+					.getAsJsonObject("object");
 		}
-		catch (Exception ex) {
+		catch (RuntimeException ex) {
 			throw new PaymentProviderException("Stripe webhook body was not readable JSON", ex);
+		}
+		if (object == null) {
+			throw new PaymentProviderException("Stripe webhook had no data.object");
 		}
 
 		String type = event.getType();
 		String providerRef = text(object, "id");
-		String orderId = text(object.path("metadata"), METADATA_ORDER_ID);
+		String orderId = text(child(object, "metadata"), METADATA_ORDER_ID);
 		if (orderId == null) {
 			orderId = text(object, "client_reference_id");
 		}
 
 		return switch (type) {
-			case "checkout.session.completed" -> {
-				// A completed session is only money in the bank when it is also paid;
-				// asynchronous methods can complete the session while still unpaid.
+			case "checkout.session.completed", "checkout.session.async_payment_succeeded" -> {
+				// A completed session is only money in the bank when it is also paid; asynchronous
+				// methods can complete the session while still unpaid.
 				String paymentStatus = text(object, "payment_status");
 				boolean paid = "paid".equals(paymentStatus);
 				yield new WebhookOutcome(
@@ -159,23 +165,28 @@ public class StripePaymentProvider implements PaymentProvider {
 						providerRef,
 						text(object, "payment_intent"),
 						orderId,
-						object.path("amount_total").asLong(0L),
+						number(object, "amount_total"),
 						text(object, "currency"),
 						paid ? "checkout session paid" : "checkout completed but payment_status=" + paymentStatus);
 			}
 			case "checkout.session.expired" -> new WebhookOutcome(
 					event.getId(), type, WebhookResultKind.EXPIRED, providerRef,
 					text(object, "payment_intent"), orderId,
-					object.path("amount_total").asLong(0L), text(object, "currency"),
+					number(object, "amount_total"), text(object, "currency"),
 					"checkout session expired");
+			case "checkout.session.async_payment_failed" -> new WebhookOutcome(
+					event.getId(), type, WebhookResultKind.FAILED, providerRef,
+					text(object, "payment_intent"), orderId,
+					number(object, "amount_total"), text(object, "currency"),
+					"asynchronous payment failed");
 			case "payment_intent.payment_failed" -> new WebhookOutcome(
 					event.getId(), type, WebhookResultKind.FAILED, null, providerRef, orderId,
-					object.path("amount").asLong(0L), text(object, "currency"),
-					"payment failed: " + text(object.path("last_payment_error"), "message"));
+					number(object, "amount"), text(object, "currency"),
+					"payment failed: " + text(child(object, "last_payment_error"), "message"));
 			case "charge.refunded" -> new WebhookOutcome(
 					event.getId(), type, WebhookResultKind.REFUNDED, null,
 					text(object, "payment_intent"), orderId,
-					object.path("amount_refunded").asLong(0L), text(object, "currency"),
+					number(object, "amount_refunded"), text(object, "currency"),
 					"charge refunded");
 			default -> new WebhookOutcome(
 					event.getId(), type, WebhookResultKind.IGNORED, providerRef, null, orderId,
@@ -183,8 +194,32 @@ public class StripePaymentProvider implements PaymentProvider {
 		};
 	}
 
-	private static String text(JsonNode node, String field) {
-		JsonNode value = node.path(field);
-		return value.isMissingNode() || value.isNull() ? null : value.asText();
+	private static JsonObject child(JsonObject node, String field) {
+		if (node == null) {
+			return null;
+		}
+		JsonElement value = node.get(field);
+		return value != null && value.isJsonObject() ? value.getAsJsonObject() : null;
+	}
+
+	private static String text(JsonObject node, String field) {
+		if (node == null) {
+			return null;
+		}
+		JsonElement value = node.get(field);
+		return value == null || value.isJsonNull() || !value.isJsonPrimitive() ? null : value.getAsString();
+	}
+
+	private static long number(JsonObject node, String field) {
+		JsonElement value = node == null ? null : node.get(field);
+		if (value == null || value.isJsonNull() || !value.isJsonPrimitive()) {
+			return 0L;
+		}
+		try {
+			return value.getAsLong();
+		}
+		catch (NumberFormatException ex) {
+			return 0L;
+		}
 	}
 }
