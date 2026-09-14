@@ -24,12 +24,21 @@ import { ProductManagement } from './pages/salemans/productManagement/ProductMan
 import { SalesAgent } from './pages/salemans/salesAgent/SalesAgent';
 import { Deals } from './pages/salemans/deals/Deals';
 import { LandingPage } from './pages/marketing/LandingPage';
+import { LegalPage } from './pages/legal/LegalPage';
 
 /** Public marketing site: one scrolling page, each route scrolls to its section. */
 const MARKETING_PATHS = ['/', '/home', '/features', '/how-it-works', '/integrations', '/security', '/about', '/contact'];
 
 export const router = createBrowserRouter([
   ...MARKETING_PATHS.map((path) => ({ path, element: <LandingPage /> })),
+  {
+    path: '/privacy',
+    element: <LegalPage slug="privacy" />,
+  },
+  {
+    path: '/terms',
+    element: <LegalPage slug="terms" />,
+  },
   {
     path: '/signin',
     element: (
