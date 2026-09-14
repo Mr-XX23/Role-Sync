@@ -4,6 +4,7 @@ import com.rolesync.authservice.dto.userregistrations.RegistrationRequest;
 import com.rolesync.authservice.dto.userregistrations.RegistrationResponse;
 import com.rolesync.authservice.exceptions.BadRequestException;
 import com.rolesync.authservice.models.AuthUserCredentials;
+import com.rolesync.authservice.models.Role;
 import com.rolesync.authservice.repository.UserRepository;
 import com.rolesync.authservice.services.AuthSecurityEventService;
 import com.rolesync.authservice.services.EmailService;
@@ -108,7 +109,8 @@ public class Registration {
                 .email(request.getEmail() != null ? request.getEmail() : "")
                 .phoneNumber(request.getPhoneNumber() != null ? request.getPhoneNumber() : "")
                 .passwordHash(passwordHash)
-                .role(request.getRole())
+                // Never from the request: this endpoint is public, so anyone could claim ADMIN.
+                .role(Role.USER)
                 .loginType(loginType)
                 .status(AuthUserCredentials.Status.INACTIVE)
                 .isEmailVerified(false)
