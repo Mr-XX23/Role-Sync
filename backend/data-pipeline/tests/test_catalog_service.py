@@ -695,3 +695,104 @@ def test_batch_set_stock_and_batch_availability(service, tenant_id):
     assert len(avail_map["RTR-100"].by_location) == 2
 
 
+def test_price_and_stock_filters_combine_on_one_sku(service, tenant_id):
+    """Price plus in_stock used to join the variant table twice, which Postgres refused (a 500)."""
+    service.upsert_category(tenant_id, CategoryCreate(key="audio", label="Audio"))
+    main = service.upsert_location(tenant_id, LocationCreate(name="Main", priority=1))
+    store = service.upsert_location(tenant_id, LocationCreate(name="Store", priority=2))
+    headphones = service.upsert_product(tenant_id, ProductCreate(name="Headphones", category="audio", status="ACTIVE"), "u1")
+    cheap, dear = sorted(
+        service.upsert_variants(
+            tenant_id,
+            headphones.id,
+            [VariantCreate(sku="HP-BASIC", price=Decimal("50.00")), VariantCreate(sku="HP-STUDIO", price=Decimal("300.00"))],
+        ),
+        key=lambda variant: variant.price,
+    )
+    speaker = service.upsert_product(tenant_id, ProductCreate(name="Speaker", category="audio", status="ACTIVE"), "u1")
+    (speaker_sku,) = service.upsert_variants(tenant_id, speaker.id, [VariantCreate(sku="SPK-1", price=Decimal("80.00"))])
+    service.set_stock(tenant_id, dear.id, main.id, 5)  # only the expensive headphones are in stock
+    service.set_stock(tenant_id, speaker_sku.id, store.id, 3)
+
+    def names(**filters):
+        return sorted(product.name for product in service.list_products(tenant_id, **filters))
+
+    assert names(max_price=Decimal("100")) == ["Headphones", "Speaker"]
+    assert names(in_stock=True) == ["Headphones", "Speaker"]
+    # One SKU must pass both: the headphones under 100 aren't in stock.
+    assert names(max_price=Decimal("100"), in_stock=True) == ["Speaker"]
+    assert names(min_price=Decimal("100"), in_stock=True) == ["Headphones"]
+    assert names(max_price=Decimal("100"), in_stock=True, location_id=main.id) == []
+    assert names(max_price=Decimal("100"), in_stock=True, location_id=store.id) == ["Speaker"]
+    assert names(min_price=Decimal("10"), max_price=Decimal("400")) == ["Headphones", "Speaker"]  # listed once each
+
+
+def test_changing_options_keeps_the_links_of_values_that_stay(service, tenant_id):
+    """Replacing the options used to delete and recreate every value, unlinking every SKU."""
+    service.upsert_category(tenant_id, CategoryCreate(key="apparel", label="Apparel"))
+    tee = service.upsert_product(tenant_id, ProductCreate(name="Team Tee", category="apparel"), "u1")
+    size, color = service.set_options(
+        tenant_id,
+        tee.id,
+        [
+            ProductOptionCreate(name="Size", values=[OptionValueCreate(value="S"), OptionValueCreate(value="M")]),
+            ProductOptionCreate(name="Color", values=[OptionValueCreate(value="Black")]),
+        ],
+    )
+    small, medium = size.values
+    service.upsert_variants(
+        tenant_id,
+        tee.id,
+        [
+            VariantCreate(sku="TEE-S", price=Decimal("20.00"), option_value_ids=[small.id, color.values[0].id]),
+            VariantCreate(sku="TEE-M", price=Decimal("20.00"), option_value_ids=[medium.id, color.values[0].id]),
+        ],
+    )
+
+    # Add XL to Size and drop the Color axis.
+    (size_after,) = service.set_options(
+        tenant_id,
+        tee.id,
+        [ProductOptionCreate(name="Size", values=[OptionValueCreate(value="S"), OptionValueCreate(value="M"), OptionValueCreate(value="XL")])],
+    )
+
+    assert size_after.id == size.id
+    assert [(value.value, value.id) for value in sorted(size_after.values, key=lambda v: v.position)][:2] == [
+        ("S", small.id),
+        ("M", medium.id),
+    ]
+    assert [value.value for value in sorted(size_after.values, key=lambda v: v.position)] == ["S", "M", "XL"]
+    linked = {variant.sku: {value.value for value in variant.option_values} for variant in service.get_product(tenant_id, tee.id).variants}
+    assert linked == {"TEE-S": {"S"}, "TEE-M": {"M"}}  # still sized; only the removed Color link is gone
+
+
+def test_duplicate_option_names_or_values_are_refused(service, tenant_id):
+    service.upsert_category(tenant_id, CategoryCreate(key="apparel", label="Apparel"))
+    tee = service.upsert_product(tenant_id, ProductCreate(name="Plain Tee", category="apparel"), "u1")
+    with pytest.raises(ValueError, match="option name may appear only once"):
+        service.set_options(tenant_id, tee.id, [ProductOptionCreate(name="Size"), ProductOptionCreate(name="Size")])
+    with pytest.raises(ValueError, match="value of option 'Size' may appear only once"):
+        service.set_options(
+            tenant_id, tee.id, [ProductOptionCreate(name="Size", values=[OptionValueCreate(value="M"), OptionValueCreate(value="M")])]
+        )
+
+
+def test_a_category_is_removed_only_when_nothing_uses_it(service, tenant_id):
+    service.upsert_category(tenant_id, CategoryCreate(key="audio", label="Audio"))
+    service.upsert_category(tenant_id, CategoryCreate(key="headphones", label="Headphones", parent_key="audio"))
+    service.upsert_category(tenant_id, CategoryCreate(key="legacy", label="Legacy"))
+    retired = service.upsert_product(tenant_id, ProductCreate(name="Old Radio", category="legacy"), "u1")
+    service.delete_product(tenant_id, retired.id)
+
+    with pytest.raises(ValueError, match="used by 1 product"):
+        service.delete_category(tenant_id, "legacy")  # retired products still name their category
+    with pytest.raises(ValueError, match="parent of 1 other category"):
+        service.delete_category(tenant_id, "audio")
+    assert service.delete_category(uuid.uuid4(), "headphones") is False  # another workspace's category
+
+    assert service.delete_category(tenant_id, "headphones") is True
+    assert service.delete_category(tenant_id, "headphones") is False
+    assert service.delete_category(tenant_id, "audio") is True  # no longer a parent
+    assert [category.key for category in service.list_categories(tenant_id)] == ["legacy"]
+
+

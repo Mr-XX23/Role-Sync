@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import case, or_, func, text
+from sqlalchemy import case, or_, func, select, text
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from catalog.search_ranking import SearchableProduct, rank_products
@@ -109,6 +109,41 @@ class ProductService:
             .order_by(Category.key.asc())
             .all()
         )
+
+    def delete_category(self, tenant_id: UUID, key: str) -> bool:
+        """Remove a category nothing uses; ``False`` if the workspace has no such category.
+
+        Products name their category by key, so a category in use (by a product in any status,
+        retired ones included) or the parent of another category is kept."""
+        category = (
+            self.db.query(Category)
+            .filter(Category.tenant_id == tenant_id, Category.key == key)
+            .first()
+        )
+        if not category:
+            return False
+        products = (
+            self.db.query(func.count(Product.id))
+            .filter(Product.tenant_id == tenant_id, Product.category == key)
+            .scalar()
+        )
+        if products:
+            raise ValueError(
+                f"Category '{key}' is used by {products} product{'s' if products != 1 else ''}; "
+                "move them to another category first"
+            )
+        children = (
+            self.db.query(func.count(Category.id))
+            .filter(Category.tenant_id == tenant_id, Category.parent_key == key)
+            .scalar()
+        )
+        if children:
+            raise ValueError(
+                f"Category '{key}' is the parent of {children} other categor{'ies' if children != 1 else 'y'}"
+            )
+        self.db.delete(category)
+        self.db.commit()
+        return True
 
     # -----------------------------------------------------------------------
     # Products
@@ -271,41 +306,30 @@ class ProductService:
             else:
                 query = query.filter(or_(*full_phrase_conds))
 
-        if min_price is not None or max_price is not None:
-            query = query.join(Variant, Variant.product_id == Product.id)
-            if min_price is not None:
-                query = query.filter(Variant.price >= min_price)
-            if max_price is not None:
-                query = query.filter(Variant.price <= max_price)
-            query = query.distinct()
-
+        # Price and stock filters look at variants. One variant must pass all of them (an item with a
+        # SKU under the price that is also in stock), checked in a subquery: joining variants once per
+        # filter put the variant table in the query twice, which Postgres refused.
+        variant_conditions = []
+        if min_price is not None:
+            variant_conditions.append(Variant.price >= min_price)
+        if max_price is not None:
+            variant_conditions.append(Variant.price <= max_price)
         if in_stock is True:
+            stocked = (
+                select(InventoryLevel.variant_id)
+                .join(Location, Location.id == InventoryLevel.location_id)
+                .where(
+                    InventoryLevel.tenant_id == tenant_id,
+                    Location.sellable == True,
+                    (InventoryLevel.qty_on_hand - InventoryLevel.qty_reserved) > 0,
+                )
+            )
             if location_id:
-                query = (
-                    query.join(Variant, Variant.product_id == Product.id)
-                    .join(InventoryLevel, InventoryLevel.variant_id == Variant.id)
-                    .join(Location, Location.id == InventoryLevel.location_id)
-                    .filter(
-                        Location.id == location_id,
-                        Location.sellable == True,
-                        (InventoryLevel.qty_on_hand - InventoryLevel.qty_reserved) > 0,
-                    )
-                )
-            else:
-                subq = (
-                    self.db.query(InventoryLevel.variant_id)
-                    .join(Location, Location.id == InventoryLevel.location_id)
-                    .filter(
-                        InventoryLevel.tenant_id == tenant_id,
-                        Location.sellable == True,
-                        (InventoryLevel.qty_on_hand - InventoryLevel.qty_reserved) > 0,
-                    )
-                    .subquery()
-                )
-                query = query.join(Variant, Variant.product_id == Product.id).filter(
-                    Variant.id.in_(self.db.query(subq.c.variant_id))
-                )
-            query = query.distinct()
+                stocked = stocked.where(Location.id == location_id)
+            variant_conditions.append(Variant.id.in_(stocked))
+        if variant_conditions:
+            matching = select(Variant.product_id).where(Variant.tenant_id == tenant_id, *variant_conditions)
+            query = query.filter(Product.id.in_(matching))
 
         return query.order_by(Product.created_at.desc()).offset(offset).limit(limit).all()
 
@@ -351,6 +375,11 @@ class ProductService:
         product_id: UUID,
         options: List[ProductOptionCreate],
     ) -> List[ProductOption]:
+        """Make a product's option axes and values exactly ``options``.
+
+        Axes and values are matched by name: one that stays keeps its id, so variants linked to it
+        keep their option values (adding "XL" to Size doesn't unlink the existing S, M and L SKUs).
+        Only removed axes and values are deleted, which unlinks the variants that used them."""
         product = (
             self.db.query(Product)
             .filter(Product.tenant_id == tenant_id, Product.id == product_id)
@@ -359,34 +388,57 @@ class ProductService:
         if not product:
             raise ValueError(f"Product '{product_id}' not found")
 
-        # Remove existing options (cascades to OptionValues and VariantOptionValues)
-        self.db.query(ProductOption).filter(
-            ProductOption.tenant_id == tenant_id,
-            ProductOption.product_id == product_id,
-        ).delete(synchronize_session=False)
+        names = [opt_in.name for opt_in in options]
+        if len(set(names)) != len(names):
+            raise ValueError("Each option name may appear only once")
+        for opt_in in options:
+            values = [val_in.value for val_in in opt_in.values]
+            if len(set(values)) != len(values):
+                raise ValueError(f"Each value of option '{opt_in.name}' may appear only once")
 
-        created_options = []
+        existing = {
+            opt.name: opt
+            for opt in self.db.query(ProductOption)
+            .options(selectinload(ProductOption.values))
+            .filter(ProductOption.tenant_id == tenant_id, ProductOption.product_id == product_id)
+        }
+
+        kept_options = set()
         for pos, opt_in in enumerate(options):
-            opt = ProductOption(
-                product_id=product_id,
-                tenant_id=tenant_id,
-                name=opt_in.name,
-                position=opt_in.position if opt_in.position else pos,
-            )
-            self.db.add(opt)
-            self.db.flush()
+            opt = existing.get(opt_in.name)
+            if opt is None:
+                opt = ProductOption(product_id=product_id, tenant_id=tenant_id, name=opt_in.name)
+                self.db.add(opt)
+                self.db.flush()
+            opt.position = opt_in.position if opt_in.position else pos
+            kept_options.add(opt.id)
 
+            current_values = {val.value: val for val in opt.values}
+            kept_values = set()
             for val_pos, val_in in enumerate(opt_in.values):
-                val = OptionValue(
-                    option_id=opt.id,
-                    tenant_id=tenant_id,
-                    value=val_in.value,
-                    position=val_in.position if val_in.position else val_pos,
-                )
-                self.db.add(val)
-            created_options.append(opt)
+                val = current_values.get(val_in.value)
+                if val is None:
+                    val = OptionValue(option_id=opt.id, tenant_id=tenant_id, value=val_in.value)
+                    self.db.add(val)
+                    self.db.flush()
+                val.position = val_in.position if val_in.position else val_pos
+                kept_values.add(val.id)
+            removed_values = [val.id for val in current_values.values() if val.id not in kept_values]
+            if removed_values:
+                # The database cascades these to the variant links that used them.
+                self.db.query(OptionValue).filter(
+                    OptionValue.tenant_id == tenant_id, OptionValue.id.in_(removed_values)
+                ).delete(synchronize_session=False)
+
+        removed_options = [opt.id for opt in existing.values() if opt.id not in kept_options]
+        if removed_options:
+            # Cascades to their values and the variant links that used them.
+            self.db.query(ProductOption).filter(
+                ProductOption.tenant_id == tenant_id, ProductOption.id.in_(removed_options)
+            ).delete(synchronize_session=False)
 
         self.db.commit()
+        self.db.expire_all()
         return (
             self.db.query(ProductOption)
             .options(joinedload(ProductOption.values))
@@ -1504,10 +1556,12 @@ class ProductService:
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
         include_holds: bool = False,
+        ref_id: Optional[UUID] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> StockMovementHistoryResponse:
-        """Stock ledger rows, newest first. Reservation holds are left out unless asked for."""
+        """Stock ledger rows, newest first. Reservation holds are left out unless asked for.
+        ``ref_id`` keeps only the rows one action wrote (a shipment's two rows, a reservation)."""
         unknown = set(reasons or ()) - set(STOCK_MOVEMENT_REASONS)
         if unknown:
             raise ValueError(f"Unknown movement reason: {', '.join(sorted(unknown))}")
@@ -1517,6 +1571,8 @@ class ProductService:
             query = query.filter(InventoryLevel.variant_id == variant_id)
         if location_id is not None:
             query = query.filter(InventoryLevel.location_id == location_id)
+        if ref_id is not None:
+            query = query.filter(StockMovement.ref_id == ref_id)
         if reasons:
             query = query.filter(StockMovement.reason.in_(reasons))
         elif not include_holds:

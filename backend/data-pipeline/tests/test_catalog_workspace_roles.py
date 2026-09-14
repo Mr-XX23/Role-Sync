@@ -38,6 +38,7 @@ CSV = {"csv_content": "product_name,type,category,sku,price\nStudio Headphones,P
 # (method, route path, JSON body, the service or import-worker method the request should reach)
 CHANGES = [
     ("POST", "/categories", {"key": "audio", "label": "Audio"}, "upsert_category"),
+    ("DELETE", "/categories/{key}", None, "delete_category"),
     ("POST", "/products", {"name": "Studio Headphones", "category": "audio"}, "upsert_product"),
     ("PUT", "/products/{product_id}", {"name": "Studio Headphones Pro"}, "upsert_product"),
     ("DELETE", "/products/{product_id}", None, "delete_product"),
@@ -128,7 +129,9 @@ def client(monkeypatch):
 
 
 def _send(client, user, method, path, body, workspace=WORKSPACE):
-    url = "/api/v1/catalog" + path.format(product_id=PRODUCT, location_id=LOCATION, reservation_id=RESERVATION, job_id=JOB, sku="HP-01")
+    url = "/api/v1/catalog" + path.format(
+        product_id=PRODUCT, location_id=LOCATION, reservation_id=RESERVATION, job_id=JOB, sku="HP-01", key="audio"
+    )
     return client.request(method, url, headers={"X-User-Id": user, "X-Tenant-Id": workspace}, json=body)
 
 
