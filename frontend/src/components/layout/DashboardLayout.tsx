@@ -6,7 +6,7 @@ import {
   // Bot, // hidden for now (Agent Manager)
   // FolderKanban, // hidden for now (Workspace)
   LifeBuoy,
-  Plus,
+  // Plus, // hidden for now (New Agent button)
   Settings as SettingsIcon,
   Package,
   MessagesSquare,
@@ -17,8 +17,9 @@ import {
 import { Sidebar } from './Sidebar';
 import type { SidebarItem } from './Sidebar';
 import { Header } from './Header';
-import { useAppSelector, useAppDispatch } from '../../store';
-import { setModalOpen } from '../../store/taskSlice';
+import { useAppSelector } from '../../store';
+// import { useAppDispatch } from '../../store'; // hidden for now (New Agent button)
+// import { setModalOpen } from '../../store/taskSlice'; // hidden for now (New Agent button)
 import { NewInstanceModal } from '../common/NewInstanceModal';
 import { WorkspaceGate } from '../guards/WorkspaceGate';
 import { rememberDashboardPath } from './dashboardMemory';
@@ -31,7 +32,7 @@ export const DashboardLayout: React.FC = () => {
   const workspaceId = useAppSelector((state) => state.workspace.currentWorkspace?.workspaceId);
   const workspaceRole = useAppSelector((state) => state.workspace.currentWorkspace?.role);
   const canManageUsers = workspaceRole === 'OWNER' || workspaceRole === 'ADMIN';
-  const dispatch = useAppDispatch();
+  // const dispatch = useAppDispatch(); // hidden for now (New Agent button)
 
   // Define sidebar configurations based on the selected persona role
   const getSidebarConfig = () => {
@@ -119,13 +120,14 @@ export const DashboardLayout: React.FC = () => {
               path: '/salesman/support',
             },
           ] as SidebarItem[],
-          actionButton: {
-            label: 'New Agent',
-            icon: Plus,
-            onClick: () => {
-              dispatch(setModalOpen(true));
-            },
-          },
+          // Hidden for now: the sidebar "New Agent" button.
+          // actionButton: {
+          //   label: 'New Agent',
+          //   icon: Plus,
+          //   onClick: () => {
+          //     dispatch(setModalOpen(true));
+          //   },
+          // },
         };
     }
   };
