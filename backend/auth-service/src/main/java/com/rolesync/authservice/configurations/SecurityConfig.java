@@ -12,6 +12,7 @@ import org.springframework.security.config.annotation.method.configuration.Enabl
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
@@ -33,6 +34,9 @@ public class SecurityConfig {
         private final JwtDecoder jwtDecoder;
         private final PublicEndpointsConfig publicEndpointsConfig;
         private final OAuth2AuthenticationSuccessHandler oauth2SuccessHandler;
+        private final ClientRegistrationRepository clientRegistrationRepository;
+
+        private static final String OAUTH2_AUTHORIZATION_BASE_URI = "/api/v1/auth/oauth2/authorization";
 
         @Value("${security.csrf.enabled:false}")
         private boolean csrfEnabled;
@@ -106,7 +110,13 @@ public class SecurityConfig {
                                                 .requestMatchers(publicEndpointsConfig.getPublicEndpoints()).permitAll()
                                                 .anyRequest().authenticated())
                                 .oauth2Login(oauth2 -> oauth2
-                                                .authorizationEndpoint(a -> a.baseUri("/api/v1/auth/oauth2/authorization"))
+                                                .authorizationEndpoint(a -> a
+                                                                .baseUri(OAUTH2_AUTHORIZATION_BASE_URI)
+                                                                // Always show the provider's account chooser (prompt=select_account)
+                                                                .authorizationRequestResolver(
+                                                                                new OAuth2AccountChooserRequestResolver(
+                                                                                                clientRegistrationRepository,
+                                                                                                OAUTH2_AUTHORIZATION_BASE_URI)))
                                                 .redirectionEndpoint(r -> r.baseUri("/api/v1/auth/oauth2/callback/*"))
                                                 .successHandler(oauth2SuccessHandler)
                                                 .failureUrl("/login?error=oauth_failed"))
