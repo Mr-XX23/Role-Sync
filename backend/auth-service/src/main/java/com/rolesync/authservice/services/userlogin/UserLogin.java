@@ -102,6 +102,15 @@ public class UserLogin {
                 throw new ForbiddenException("Account is blocked or suspended");
             }
 
+            // A temporary password from a workspace admin only works for a limited time.
+            if (user.temporaryPasswordExpired(LocalDateTime.now())) {
+                log.warn("Expired temporary password used for user: {}", user.getAuthUserId());
+                loginUtilities.saveLoginEvent(user, "TEMP_PASSWORD_EXPIRED_LOGIN", "Temporary password expired",
+                        ipAddress, userAgent);
+                throw new ForbiddenException(
+                        "Your temporary password has expired. Ask your workspace admin to resend your invitation.");
+            }
+
             // Generate access token (7 days) and refresh token (30 days)
             String accessToken = jwtService.generateAccessToken(user);
             String refreshToken = jwtService.generateRefreshToken(user);
@@ -148,6 +157,7 @@ public class UserLogin {
         loginResponse.setStatus(user.getStatus().name());
         loginResponse.setRole(String.valueOf(user.getRole()));
         loginResponse.setLastLoginTime(String.valueOf(user.getLastLoginAt()));
+        loginResponse.setMustChangePassword(user.requiresPasswordChange());
         return loginResponse;
     }
 

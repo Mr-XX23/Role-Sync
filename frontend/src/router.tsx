@@ -24,6 +24,7 @@ import { ProductManagement } from './pages/salemans/productManagement/ProductMan
 import { SalesAgent } from './pages/salemans/salesAgent/SalesAgent';
 import { Skills } from './pages/salemans/skills/Skills';
 import { Deals } from './pages/salemans/deals/Deals';
+import { UserManagement } from './pages/salemans/userManagement/UserManagement';
 import { LandingPage } from './pages/marketing/LandingPage';
 import { LegalPage } from './pages/legal/LegalPage';
 
@@ -90,7 +91,11 @@ export const router = createBrowserRouter([
   },
   {
     path: '/change-password',
-    element: <Changepassword />,
+    element: (
+      <ProtectedRoute>
+        <Changepassword />
+      </ProtectedRoute>
+    ),
   },
   {
     path: '/onboarding',
@@ -158,6 +163,10 @@ export const router = createBrowserRouter([
       {
         path: 'workspace',
         element: <Workspace />,
+      },
+      {
+        path: 'users',
+        element: <UserManagement />,
       },
       {
         path: 'profile',

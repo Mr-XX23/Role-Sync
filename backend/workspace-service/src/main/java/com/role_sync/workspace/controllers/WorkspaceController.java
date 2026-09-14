@@ -1,8 +1,5 @@
 package com.role_sync.workspace.controllers;
 
-import com.role_sync.workspace.dto.AddMemberRequest;
-import com.role_sync.workspace.dto.UpdateMemberRoleRequest;
-import com.role_sync.workspace.dto.WorkspaceMembershipResponse;
 import com.role_sync.workspace.dto.WorkspaceRequest;
 import com.role_sync.workspace.dto.WorkspaceResponse;
 import com.role_sync.workspace.services.WorkspaceService;
@@ -15,7 +12,6 @@ import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -55,34 +51,7 @@ public class WorkspaceController {
         return workspaceService.getWorkspacesForUser(authUserId);
     }
 
-    @PostMapping("/{workspaceId}/members")
-    public Mono<ResponseEntity<Map<String, Object>>> addMember(
-            @PathVariable UUID workspaceId,
-            @RequestHeader(value = "X-User-Id", required = false) String userIdHeader,
-            @RequestHeader(value = "X-Auth-User-Id", required = false) String authUserIdHeader,
-            @Valid @RequestBody AddMemberRequest request) {
-
-        UUID callerAuthUserId = resolveAuthUserId(userIdHeader, authUserIdHeader);
-        return workspaceService.addMemberToWorkspace(workspaceId, callerAuthUserId, request)
-                .map(membershipId -> ResponseEntity.status(HttpStatus.CREATED)
-                        .body(Map.of(
-                                "membership_id", membershipId,
-                                "message", "Member added to workspace successfully"
-                        )));
-    }
-
-    @PutMapping("/{workspaceId}/members/{membershipId}/role")
-    public Mono<ResponseEntity<WorkspaceMembershipResponse>> updateMemberRole(
-            @PathVariable UUID workspaceId,
-            @PathVariable UUID membershipId,
-            @RequestHeader(value = "X-User-Id", required = false) String userIdHeader,
-            @RequestHeader(value = "X-Auth-User-Id", required = false) String authUserIdHeader,
-            @Valid @RequestBody UpdateMemberRoleRequest request) {
-
-        UUID callerAuthUserId = resolveAuthUserId(userIdHeader, authUserIdHeader);
-        return workspaceService.updateMemberRole(workspaceId, membershipId, callerAuthUserId, request)
-                .map(ResponseEntity::ok);
-    }
+    // Member routes (/{workspaceId}/members/**) live in WorkspaceMemberController.
 
     @PutMapping("/{workspaceId}")
     public Mono<ResponseEntity<WorkspaceResponse>> updateWorkspace(

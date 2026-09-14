@@ -55,6 +55,7 @@ public class VerifyUser {
         userDetails.put("mfaEnabled", user.isMfaEnabled());
         userDetails.put("loginType", user.getLoginType() != null ? user.getLoginType().name() : "");
         userDetails.put("googleId", user.getGoogleId() != null ? user.getGoogleId() : "");
+        userDetails.put("mustChangePassword", user.requiresPasswordChange());
         return userDetails;
     }
 

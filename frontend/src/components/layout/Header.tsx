@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, LogOut, Menu, User, Settings, ChevronDown } from 'lucide-react';
+import { Search, LogOut, Menu, User, Settings, ChevronDown, KeyRound, Building2, Check } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { logoutUser } from '../../store/authSlice';
 import { setModalOpen } from '../../store/taskSlice';
+import { rememberWorkspace, setCurrentWorkspace } from '../../store/workspaceSlice';
 import { ThemeToggle } from '../ThemeToggle';
+
+const ROLE_LABEL: Record<string, string> = { OWNER: 'Owner', ADMIN: 'Admin', MEMBER: 'Member', VIEWER: 'Viewer' };
 
 interface HeaderProps {
   onMenuToggle: () => void;
@@ -18,8 +21,9 @@ export const Header: React.FC<HeaderProps> = ({
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
   const { user } = useAppSelector((state) => state.auth);
-  const { profile } = useAppSelector((state) => state.workspace);
+  const { profile, workspaces, currentWorkspace } = useAppSelector((state) => state.workspace);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
 
   const handleLogout = () => {
     dispatch(logoutUser());
@@ -55,6 +59,61 @@ export const Header: React.FC<HeaderProps> = ({
             pgvector Node: ACTIVE
           </span>
         </div>
+
+        {/* Workspace Switcher (only for people in more than one workspace) */}
+        {workspaces.length > 1 && currentWorkspace && (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setWorkspaceOpen(!workspaceOpen)}
+              aria-haspopup="menu"
+              aria-expanded={workspaceOpen}
+              title="Switch workspace"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-border/80 text-xs font-semibold text-foreground hover:bg-muted transition-colors cursor-pointer max-w-[12rem]"
+            >
+              <Building2 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+              <span className="truncate">{currentWorkspace.name}</span>
+              <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground shrink-0 transition-transform ${workspaceOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {workspaceOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setWorkspaceOpen(false)} />
+                <div role="menu" className="absolute right-0 mt-2.5 w-64 bg-card border border-border rounded-xl shadow-md p-1.5 z-50">
+                  <p className="px-3 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-muted-foreground">
+                    Switch workspace
+                  </p>
+                  {workspaces.map((ws) => {
+                    const selected = ws.workspaceId === currentWorkspace.workspaceId;
+                    return (
+                      <button
+                        key={ws.workspaceId}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={selected}
+                        onClick={() => {
+                          setWorkspaceOpen(false);
+                          if (!selected) {
+                            dispatch(setCurrentWorkspace(ws));
+                            rememberWorkspace(ws.workspaceId);
+                          }
+                        }}
+                        className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-left transition-colors cursor-pointer ${
+                          selected ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                        }`}
+                      >
+                        <span className="flex-1 min-w-0">
+                          <span className="block font-semibold truncate">{ws.name}</span>
+                          <span className="block text-[10px] text-muted-foreground">{ROLE_LABEL[ws.role ?? ''] ?? 'Member'}</span>
+                        </span>
+                        {selected && <Check className="w-3.5 h-3.5 text-primary shrink-0" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Deploy Trigger */}
         <button
@@ -139,6 +198,17 @@ export const Header: React.FC<HeaderProps> = ({
                   >
                     <Settings className="w-4 h-4 text-muted-foreground" />
                     <span>System Settings</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setProfileOpen(false);
+                      navigate('/change-password');
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-all duration-150 cursor-pointer"
+                  >
+                    <KeyRound className="w-4 h-4 text-muted-foreground" />
+                    <span>Change Password</span>
                   </button>
                 </div>
 

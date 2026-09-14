@@ -1515,7 +1515,7 @@ export const Profile: React.FC = () => {
                     <div className="flex items-center justify-between">
                       <h5 className="font-bold text-xs text-foreground">{ws.name}</h5>
                       <span className="text-[9px] font-mono bg-primary/10 text-primary border border-primary/20 px-2 py-0.5 rounded font-bold uppercase">
-                        OWNER
+                        {ws.role || 'MEMBER'}
                       </span>
                     </div>
                     {ws.description && (
@@ -1536,7 +1536,7 @@ export const Profile: React.FC = () => {
                   <span>Role-Based Access</span>
                 </p>
                 <p className="text-[10px] text-muted-foreground leading-relaxed">
-                  Your identity holds Owner permissions across this workspace.
+                  Each workspace shows your role there. Owners and admins manage people under User Management.
                 </p>
               </div>
             </div>

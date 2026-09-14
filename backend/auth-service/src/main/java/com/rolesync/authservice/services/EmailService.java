@@ -26,7 +26,10 @@ import org.thymeleaf.context.Context;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -224,6 +227,128 @@ public class EmailService {
                             .message("Failed to send welcome email")
                             .build());
         }
+    }
+
+    /**
+     * Sends sign-in details to someone a workspace admin added: their sign-in email and a
+     * temporary password they must replace when they first sign in. The password exists only in
+     * this email; it is never logged, and only its hash is stored.
+     *
+     * @param reissued true when an admin resends the invitation (the earlier password stopped working)
+     */
+    @Async
+    public CompletableFuture<EmailResponse> sendAccountInvitationEmail(String email, String recipientName,
+            String workspaceName, String invitedByName, String temporaryPassword, LocalDateTime expiresAt,
+            boolean reissued, UUID authUserId) {
+        try {
+            if (!isValidEmail(email)) {
+                return CompletableFuture.completedFuture(failure("This email address can't receive email"));
+            }
+            if (isRateLimited(email)) {
+                log.warn("Rate limit exceeded, not sending account invitation to user: {}", authUserId);
+                return CompletableFuture.completedFuture(
+                        failure("Too many emails were sent to this address in the last hour. Try again later."));
+            }
+
+            String workspace = singleLine(workspaceName, "your team's workspace");
+            Map<String, Object> variables = new HashMap<>();
+            variables.put("appName", appName);
+            variables.put("recipientName", singleLine(recipientName, "there"));
+            variables.put("workspaceName", workspace);
+            variables.put("invitedByName", singleLine(invitedByName, "Your workspace admin"));
+            variables.put("loginEmail", email);
+            variables.put("temporaryPassword", temporaryPassword);
+            variables.put("signInLink", frontendUrl + "/signin");
+            variables.put("expiresOn", formatExpiry(expiresAt));
+            variables.put("reissued", reissued);
+
+            EmailRequest request = EmailRequest.builder()
+                    .to(email)
+                    .subject(reissued
+                            ? String.format("Your new %s sign-in details", appName)
+                            : String.format("You've been added to %s on %s", workspace, appName))
+                    .templateName("account-invitation")
+                    .templateVariables(variables)
+                    .isHtml(true)
+                    .build();
+
+            return sendEmailWithRetry(request, EmailEventLog.EmailType.NOTIFICATION, authUserId);
+        } catch (Exception e) {
+            log.error("Unexpected error sending account invitation to user: {}", authUserId, e);
+            return CompletableFuture.completedFuture(failure("The invitation email could not be sent"));
+        }
+    }
+
+    /** Tells someone who already has an account that a workspace admin added them to a workspace. */
+    @Async
+    public CompletableFuture<EmailResponse> sendWorkspaceAccessEmail(String email, String recipientName,
+            String workspaceName, String invitedByName, String roleName, UUID authUserId) {
+        try {
+            if (!isValidEmail(email)) {
+                return CompletableFuture.completedFuture(failure("This email address can't receive email"));
+            }
+            if (isRateLimited(email)) {
+                log.warn("Rate limit exceeded, not sending workspace access email to user: {}", authUserId);
+                return CompletableFuture.completedFuture(
+                        failure("Too many emails were sent to this address in the last hour. Try again later."));
+            }
+
+            String workspace = singleLine(workspaceName, "a workspace");
+            Map<String, Object> variables = new HashMap<>();
+            variables.put("appName", appName);
+            variables.put("recipientName", singleLine(recipientName, "there"));
+            variables.put("workspaceName", workspace);
+            variables.put("invitedByName", singleLine(invitedByName, "A workspace admin"));
+            variables.put("roleName", roleLabel(roleName));
+            variables.put("signInLink", frontendUrl + "/signin");
+
+            EmailRequest request = EmailRequest.builder()
+                    .to(email)
+                    .subject(String.format("You've been added to %s on %s", workspace, appName))
+                    .templateName("workspace-access")
+                    .templateVariables(variables)
+                    .isHtml(true)
+                    .build();
+
+            return sendEmailWithRetry(request, EmailEventLog.EmailType.NOTIFICATION, authUserId);
+        } catch (Exception e) {
+            log.error("Unexpected error sending workspace access email to user: {}", authUserId, e);
+            return CompletableFuture.completedFuture(failure("The notification email could not be sent"));
+        }
+    }
+
+    /** Whether an address passes the checks every send applies (format, blocked domains). */
+    public boolean isDeliverableAddress(String email) {
+        return isValidEmail(email);
+    }
+
+    private static EmailResponse failure(String message) {
+        return EmailResponse.builder().success(false).message(message).build();
+    }
+
+    /** Names typed by users end up in subject lines: keep them to one clean line. */
+    static String singleLine(String value, String fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        String cleaned = value.replaceAll("\\p{Cntrl}", " ").replaceAll("\\s+", " ").trim();
+        return cleaned.isEmpty() ? fallback : cleaned;
+    }
+
+    private static String roleLabel(String roleName) {
+        if (roleName == null || roleName.isBlank()) {
+            return "Member";
+        }
+        String lower = roleName.trim().toLowerCase(Locale.ROOT);
+        return Character.toUpperCase(lower.charAt(0)) + lower.substring(1);
+    }
+
+    private static String formatExpiry(LocalDateTime expiresAt) {
+        if (expiresAt == null) {
+            return null;
+        }
+        return expiresAt.atZone(ZoneId.systemDefault())
+                .format(DateTimeFormatter.ofPattern("MMMM d, yyyy 'at' HH:mm z", Locale.ENGLISH));
     }
 
     @Retryable(retryFor = { MailException.class,
