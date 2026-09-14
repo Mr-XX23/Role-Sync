@@ -73,7 +73,8 @@ public class AdminBillingController {
 			@RequestParam(value = "page", defaultValue = "0") int page,
 			@RequestParam(value = "size", defaultValue = "20") int size) {
 		requireAdmin(userIdHeader);
-		String cleanQuery = query == null || query.isBlank() ? null : query.trim();
+		// Never null: Postgres cannot type a null text parameter inside lower(...) and fails the query.
+		String cleanQuery = query == null ? "" : query.trim().toLowerCase(java.util.Locale.ROOT);
 		Page<CreditAccount> result = accounts.search(cleanQuery, status, pageRequest(page, size));
 		return ResponseEntity.ok(new PageResponse<>(
 				result.getContent().stream().map(AccountResponse::from).toList(),

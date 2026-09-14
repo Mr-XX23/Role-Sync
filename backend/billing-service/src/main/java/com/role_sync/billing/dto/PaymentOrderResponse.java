@@ -10,6 +10,8 @@ import java.util.UUID;
 /** An order as returned to the dashboard. */
 public record PaymentOrderResponse(
 		UUID orderId,
+		UUID workspaceId,
+		UUID userId,
 		String packageCode,
 		long credits,
 		long amountMinor,
@@ -25,6 +27,8 @@ public record PaymentOrderResponse(
 	public static PaymentOrderResponse from(PaymentOrder order) {
 		return new PaymentOrderResponse(
 				order.getId(),
+				order.getAccountId(),
+				order.getUserId(),
 				order.getPackageCode(),
 				order.getCredits(),
 				order.getAmountMinor(),

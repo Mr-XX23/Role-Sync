@@ -112,7 +112,8 @@ public class UsageReportService {
 			}
 		}
 
-		long sold = transactions.sumByTypesSince(List.of(CreditTransactionType.PURCHASE), from);
+		// Net of refunds (clawbacks are negative), so it matches revenue, which counts only settled orders.
+		long sold = transactions.sumByTypesSince(List.of(CreditTransactionType.PURCHASE, CreditTransactionType.REFUND_CLAWBACK), from);
 		long granted = transactions.sumByTypesSince(List.of(CreditTransactionType.WELCOME_GRANT, CreditTransactionType.ADMIN_GRANT), from);
 		long used = -transactions.sumByTypesSince(List.of(CreditTransactionType.USAGE), from);
 		BigDecimal cost = usageEvents.sumCostSince(from).setScale(4, RoundingMode.HALF_UP);

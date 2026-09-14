@@ -23,7 +23,7 @@ public interface CreditAccountRepository extends JpaRepository<CreditAccount, UU
 	@Query("""
 			select a from CreditAccount a
 			where (:status is null or a.status = :status)
-			  and (:query is null or lower(cast(a.workspaceId as string)) like lower(concat('%', :query, '%')))
+			  and (:query = '' or lower(cast(a.workspaceId as string)) like concat('%', :query, '%'))
 			order by a.lastActivityAt desc nulls last, a.createdAt desc
 			""")
 	Page<CreditAccount> search(@Param("query") String query, @Param("status") CreditAccountStatus status, Pageable pageable);
