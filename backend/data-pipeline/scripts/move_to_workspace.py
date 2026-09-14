@@ -75,7 +75,16 @@ def move_vault(user_id: str, source: str, target: str, apply: bool) -> None:
     db = pymongo.MongoClient(os.environ.get("MONGODB_URI", "mongodb://mongodb:27017"), serverSelectionTimeoutMS=5000)[
         os.environ.get("MONGODB_DB_NAME", "rolesync_rag")
     ]
-    doc_ids = [d["doc_id"] for d in db.knowledge_documents.find({"tenant_id": source, "user_id": user_id}, {"doc_id": 1})]
+    # Synced documents (Gmail, Drive, ...) are personal and stay where they are: moving them would give their
+    # chunks the target workspace's ACL entry and show them to everyone there.
+    from module_1_document_processing.connector_privacy import shared_records_filter
+
+    doc_ids = [
+        d["doc_id"]
+        for d in db.knowledge_documents.find(
+            {"tenant_id": source, "user_id": user_id, **shared_records_filter()}, {"doc_id": 1}
+        )
+    ]
     chunk_filter = {
         "tenant_id": source,
         "$or": [{"doc_id": {"$in": doc_ids}}, {"doc_ref_id": {"$in": doc_ids}}, {"external_id": {"$in": doc_ids}}],

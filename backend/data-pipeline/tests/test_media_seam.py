@@ -57,7 +57,7 @@ def test_video_is_parked():
 
 def test_parked_media_lands_on_the_queue():
     ParserService().parse_event(_event("aud_2", "notes.m4a", "audio/mp4"), raw_bytes=b"\x00")
-    job = media_job_queue.get("tenant_media:gdrive:aud_2")
+    job = media_job_queue.get("tenant_media:gdrive:u1:aud_2")
     assert job is not None
     assert job.status == "PENDING"
     assert job.mime_type == "audio/mp4"

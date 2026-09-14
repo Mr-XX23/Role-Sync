@@ -152,6 +152,7 @@ class ReconciliationScheduler:
                             source=source,
                             live_source_docs=listing.items,
                             complete=listing.complete,
+                            user_id=conn.user_id,
                         )
                     )
                 except Exception as err:

@@ -12,6 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from module_1_document_processing.connector_privacy import visible_to
 from module_1_document_processing.identity import bind_identity
 from module_1_document_processing.workspace_access import (
     WorkspaceAccess,
@@ -66,6 +67,8 @@ def list_holds(
         raise HTTPException(status_code=400, detail="kind must be REJECTED or QUARANTINED.")
 
     holds = gatekeeper_store.list_holds(access.workspace_id, kind=(kind or ""), limit=limit)
+    # A held document synced from a rep's apps is theirs alone, like everything else they sync.
+    holds = [h for h in holds if visible_to({"source": h.source, "user_id": h.user_id}, access.user_id)]
     return {
         "status": "success",
         "count": len(holds),
@@ -102,7 +105,7 @@ def release_hold(doc_id: str, access: WorkspaceAccess = Depends(require_workspac
     hold = gatekeeper_store.get_hold(doc_id, tenant_id=access.workspace_id)
     # Anything not still HELD (already released) is not releasable, and must read
     # the same as absent rather than reporting a second success.
-    if not hold or hold.status != "HELD":
+    if not hold or hold.status != "HELD" or not visible_to({"source": hold.source, "user_id": hold.user_id}, access.user_id):
         raise HTTPException(status_code=404, detail="No held document with that id.")
 
     replay = hold.replay if isinstance(hold.replay, dict) else None

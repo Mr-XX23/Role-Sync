@@ -71,7 +71,9 @@ def release(client, user=OWNER, doc_id="doc_held01"):
 
 
 def hold_with_replay(store, payload=None):
-    store.hold(KIND_REJECTED, make_doc(doc_id=CANONICAL, tenant_id=WORKSPACE), "low utility", ttl_days=30)
+    held = make_doc(doc_id=CANONICAL, tenant_id=WORKSPACE)
+    held.source = "USER_UPLOAD"  # an upload is the workspace's to review; a synced document only its rep's
+    store.hold(KIND_REJECTED, held, "low utility", ttl_days=30)
     store.attach_replay(
         "doc_held01",
         {"kind": JOB_DOCUMENT_INGEST, "payload": payload or {
@@ -113,7 +115,9 @@ def test_a_release_is_not_repeatable_and_does_not_requeue_twice(client, store, q
 
 def test_a_hold_from_before_replay_existed_is_released_honestly(client, store, queue):
     """No replay data: say so, rather than claim it was requeued."""
-    store.hold(KIND_REJECTED, make_doc(doc_id=CANONICAL, tenant_id=WORKSPACE), "old hold", ttl_days=30)
+    held = make_doc(doc_id=CANONICAL, tenant_id=WORKSPACE)
+    held.source = "USER_UPLOAD"
+    store.hold(KIND_REJECTED, held, "old hold", ttl_days=30)
 
     body = release(client).json()
 

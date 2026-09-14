@@ -1,6 +1,7 @@
 import os
 import tempfile
 from typing import Any
+from module_1_document_processing.connector_privacy import document_id
 from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent
 from module_1_document_processing.parsing.parsed_document import ParsedDocument
 
@@ -112,7 +113,7 @@ class LlamaParserService:
         return "", "unsupported", "FAILED"
 
     def parse(self, event: CanonicalEvent, raw_bytes: bytes | None = None) -> ParsedDocument:
-        doc_id = f"{event.tenant_id}:{event.source}:{event.external_id}"
+        doc_id = document_id(event.tenant_id, event.source, event.user_id, event.external_id)
         filename = event.metadata.get("name") or event.metadata.get("title") or f"{event.external_id}.pdf"
         mime_type = event.metadata.get("mime_type", "application/pdf")
 

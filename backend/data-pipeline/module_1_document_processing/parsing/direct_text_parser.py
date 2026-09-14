@@ -1,5 +1,6 @@
 from typing import Any
 import json
+from module_1_document_processing.connector_privacy import document_id
 from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent
 from module_1_document_processing.parsing.parsed_document import ParsedDocument
 
@@ -7,7 +8,7 @@ class DirectTextParser:
     """Fast local parser for plain text, Markdown, code, and JSON documents."""
 
     def parse(self, event: CanonicalEvent, raw_bytes: bytes | None = None) -> ParsedDocument:
-        doc_id = f"{event.tenant_id}:{event.source}:{event.external_id}"
+        doc_id = document_id(event.tenant_id, event.source, event.user_id, event.external_id)
         text_content = ""
 
         if raw_bytes is not None:

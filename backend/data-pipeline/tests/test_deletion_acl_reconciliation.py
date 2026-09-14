@@ -37,7 +37,7 @@ def test_deletion_handler():
     )
     success = handler.process_deletion(delete_event)
     assert success is True
-    doc = store.get_document("tenant_x:gdrive:file_del_10")
+    doc = store.get_document("tenant_x:gdrive:usr_01:file_del_10")
     assert doc is not None
     assert doc.status == "DELETED"
 
@@ -72,7 +72,7 @@ def test_acl_sync():
     )
     success = acl_service.process_acl_change(acl_event)
     assert success is True
-    doc = store.get_document("tenant_x:slack:channel_99")
+    doc = store.get_document("tenant_x:slack:usr_02:channel_99")
     assert doc is not None
     assert "usr_03" in doc.acl
 
@@ -122,6 +122,6 @@ def test_reconciliation_sweeper():
     assert report.corrections_applied == 2
 
     # Verify doc1 is now DELETED
-    assert store.get_document("tenant_x:gdrive:file_deleted_at_source").status == "DELETED"
+    assert store.get_document("tenant_x:gdrive:usr_01:file_deleted_at_source").status == "DELETED"
     # Verify doc2 ACL is updated
-    assert "usr_02@example.com" in store.get_document("tenant_x:gdrive:file_acl_changed_at_source").acl
+    assert "usr_02@example.com" in store.get_document("tenant_x:gdrive:usr_01:file_acl_changed_at_source").acl

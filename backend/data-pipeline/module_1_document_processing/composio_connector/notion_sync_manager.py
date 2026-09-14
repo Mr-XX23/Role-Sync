@@ -639,21 +639,11 @@ class NotionSyncManager:
         if not conn and event.user_id:
             conn = self.store.get_connection(tenant_id=event.tenant_id, user_id=event.user_id)
 
-        # 3. Match connection with webhook_enabled == True
+        # Only this rep's connection: synced documents are private to their rep, so an event is never
+        # attributed to someone else's connection just because theirs is the one with webhooks on.
         if not conn:
-            conn = self.store.find_active_webhook_connection(tenant_id=event.tenant_id)
-            if not conn:
-                conn = self.store.find_active_webhook_connection(tenant_id=None)
-
-        # 4. Fallback to any active connection
-        if not conn:
-            active_conns = self.store.list_all_active_connections()
-            if active_conns:
-                conn = active_conns[0]
-
-        # 5. Last resort fallback
-        if not conn:
-            conn = self.store.get_or_create_connection(tenant_id=event.tenant_id, user_id=event.user_id or "usr_active")
+            print(f"[NotionSyncManager] Webhook: no connection of this rep matches the event. Skipping event.")
+            return {"status": "ignored", "reason": "No matching connection"}
 
         # Crucial: align event tenant and user with the matched connection
         event.tenant_id = conn.tenant_id

@@ -71,7 +71,10 @@ class ReconciliationSweeper:
         live_source_docs: list[dict[str, Any]],
         complete: bool = True,
         max_delete_ratio: Optional[float] = None,
+        user_id: str = "",
     ) -> SweepReport:
+        """``user_id``: whose listing ``live_source_docs`` is. Only that rep's documents are compared with it, so
+        another rep's documents never look deleted (or changed) because this rep can't see them."""
         print(f"[ReconciliationSweeper] Starting sweep for tenant_id={tenant_id}, source={source}...")
         report = SweepReport(tenant_id=tenant_id, source=source)
 
@@ -81,6 +84,7 @@ class ReconciliationSweeper:
             tenant_id=tenant_id,
             source=source,
             exclude_statuses=("DELETED",),
+            user_id=user_id,
         )
         report.total_checked = len(indexed_docs)
 

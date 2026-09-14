@@ -32,7 +32,7 @@ def test_direct_text_parser():
         metadata={"subject": "Project Status", "text": "All services operating normally.", "mime_type": "text/plain"},
     )
     parsed = parser.parse(event)
-    assert parsed.doc_id == "tenant_alpha:gmail:msg_01"
+    assert parsed.doc_id == "tenant_alpha:gmail:usr_01:msg_01"
     assert "# Project Status" in parsed.text_content
     assert "All services operating normally." in parsed.text_content
     assert parsed.parser_used == "local_text"
@@ -59,7 +59,7 @@ def test_llama_parser_reports_failure_when_nothing_is_extractable():
     parsed = LlamaParserService().parse(
         _pdf_event({"name": "Q3_Report.pdf", "mime_type": "application/pdf"})
     )
-    assert parsed.doc_id == "tenant_alpha:gdrive:file_pdf_99"
+    assert parsed.doc_id == "tenant_alpha:gdrive:usr_02:file_pdf_99"
     assert parsed.parse_status == "FAILED"
     assert parsed.text_content == ""
     assert "placeholder" not in (parsed.text_content or "").lower()
@@ -110,5 +110,5 @@ def test_parser_service_unsupported():
     parsed = service.parse_event(event)
     assert parsed.parse_status == "FAILED"
     assert parsed.parser_used == "unsupported"
-    failure = service.failure_store.get_failure("tenant_alpha:gdrive:bin_01")
+    failure = service.failure_store.get_failure("tenant_alpha:gdrive:usr_04:bin_01")
     assert failure is not None

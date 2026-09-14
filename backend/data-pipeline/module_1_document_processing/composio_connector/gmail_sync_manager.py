@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
+from module_1_document_processing.connector_privacy import document_id
 from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent, EventType
 from module_1_document_processing.composio_connector.composio_client import ComposioClient
 from module_1_document_processing.composio_connector.normalizers.gmail_normalizer import normalize_gmail
@@ -610,7 +611,7 @@ class GmailSyncManager:
 
             # 3. Record Deduplication Lineage
             rec = SyncedMessageRecord(
-                doc_id=f"{event.tenant_id}:{event.source}:{event.external_id}",
+                doc_id=document_id(event.tenant_id, event.source, event.user_id, event.external_id),
                 tenant_id=conn.tenant_id,
                 connection_id=conn.connection_id,
                 message_id=msg_id,

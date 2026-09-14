@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from module_1_document_processing.identity import bind_identity
 from module_1_document_processing.workspace_access import WorkspaceAccess, require_workspace_member, require_writer
+from module_1_document_processing.connector_privacy import chunk_acl, is_connector_source, visible_records_filter, visible_to
 
 try:
     import pymongo
@@ -46,8 +47,9 @@ from module_3_batch_ingestion_vector.ingestion_pipeline import BatchIngestionPip
 
 # The knowledge vault is shared by a workspace, like the catalog. Every route requires the
 # gateway-verified identity (X-User-Id) and active membership of the workspace in X-Tenant-Id
-# (require_workspace_member); documents are looked up within that workspace only
-# (_find_doc_record(doc_id, workspace_id)). The uploader is recorded as the document's user_id.
+# (require_workspace_member); documents are looked up within that workspace only, and a document
+# synced from a rep's connected apps only for that rep (_find_visible_doc; see connector_privacy).
+# The uploader is recorded as the document's user_id.
 router = APIRouter(tags=["Knowledge Vault"], dependencies=[Depends(bind_identity)])
 
 # Storage & Engine instances
@@ -199,12 +201,23 @@ def _find_doc_record(doc_id: str, tenant_id: Optional[str] = None) -> Optional[d
     return doc
 
 
-def _list_doc_records(tenant_id: str, user_id: str = "") -> list[dict[str, Any]]:
+def _find_visible_doc(doc_id: str, access: WorkspaceAccess) -> Optional[dict[str, Any]]:
+    """A document of the caller's workspace that the caller may see: request handlers use this. Another
+    rep's synced (connector) document is treated as not there, for workspace owners and admins too."""
+    record = _find_doc_record(doc_id, access.workspace_id)
+    return record if visible_to(record, access.user_id) else None
+
+
+def _list_doc_records(tenant_id: str, user_id: str = "", viewer: Optional[str] = None) -> list[dict[str, Any]]:
+    """The workspace's registry rows, newest first; ``user_id``: only that person's. With ``viewer``, only the
+    rows that person may see (other reps' synced documents are left out)."""
     if _docs_col is not None:
         try:
             query: dict[str, Any] = {"tenant_id": tenant_id}
             if user_id:
                 query["user_id"] = user_id
+            if viewer is not None:
+                query.update(visible_records_filter(viewer))
             cursor = _docs_col.find(query).sort("created_at", -1)
             docs = []
             for d in cursor:
@@ -216,7 +229,9 @@ def _list_doc_records(tenant_id: str, user_id: str = "") -> list[dict[str, Any]]
 
     results = [
         d for d in _in_memory_docs.values()
-        if d.get("tenant_id") == tenant_id and (not user_id or d.get("user_id") == user_id)
+        if d.get("tenant_id") == tenant_id
+        and (not user_id or d.get("user_id") == user_id)
+        and (viewer is None or visible_to(d, viewer))
     ]
     results.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     return results
@@ -319,7 +334,9 @@ def plan_deduplication(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _canonical_doc_id(record: dict[str, Any], doc_id: str) -> str:
     """The pipeline's id for a vault document (tenant:source:doc_id), which keys its chunk
-    fingerprints and lineage."""
+    fingerprints and lineage. A synced document's registry id already is its pipeline id."""
+    if is_connector_source(record.get("source")):
+        return doc_id
     tenant = record.get("tenant_id", "")
     source = record.get("source", "USER_UPLOAD")
     return f"{tenant}:{source}:{doc_id}" if tenant else doc_id
@@ -608,7 +625,9 @@ def process_embed_job(payload: dict) -> None:
         source=payload.get("source", "USER_UPLOAD"),
         # Connector documents carry the provider's id; reconciliation matches on it.
         external_id=payload.get("external_id") or doc_id,
-        acl=list(payload.get("acl") or []),
+        # A connector document is indexed for its rep only, whatever the payload says: jobs queued before this
+        # rule, dead letters replayed later and re-indexing all come through here.
+        acl=chunk_acl(payload.get("source"), payload.get("user_id", ""), payload.get("acl") or []),
         mime_type=payload.get("mime_type", "text/plain"),
         text_content=text,
         parser_used=payload.get("parser_used", ""),
@@ -659,7 +678,7 @@ def process_embed_job(payload: dict) -> None:
 @router.get("/knowledge-vault/stats")
 def get_vault_stats(access: WorkspaceAccess = Depends(require_workspace_member)):
     """Aggregated statistics across the workspace's knowledge documents, vector chunks, and sales taxonomy categories."""
-    docs = _list_doc_records(access.workspace_id)
+    docs = _list_doc_records(access.workspace_id, viewer=access.user_id)
     total_docs = len(docs)
     total_chunks = sum(d.get("chunks", 0) for d in docs)
     total_bytes = sum(d.get("size_bytes", 0) for d in docs)
@@ -703,7 +722,7 @@ def list_documents(
     access: WorkspaceAccess = Depends(require_workspace_member),
 ):
     """Lists the workspace's knowledge documents (``mine=true``: only the caller's uploads) with status, sales category filtering, and multi-field search."""
-    docs = _list_doc_records(access.workspace_id, access.user_id if mine else "")
+    docs = _list_doc_records(access.workspace_id, access.user_id if mine else "", viewer=access.user_id)
 
     if status and status.lower() != "all":
         docs = [d for d in docs if d.get("status", "").lower() == status.lower()]
@@ -1135,7 +1154,7 @@ def update_sales_classification(
 ):
     """Allows a salesperson to manually update or override the sales taxonomy category, target competitor, tags, or summary."""
     require_writer(access)
-    doc = _find_doc_record(doc_id, access.workspace_id)
+    doc = _find_visible_doc(doc_id, access)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
 
@@ -1182,7 +1201,7 @@ def reclassify_document(
 ):
     """Re-runs the SalesClassifier (OpenRouter AI + heuristics) on an existing document."""
     require_writer(access)
-    doc = _find_doc_record(doc_id, access.workspace_id)
+    doc = _find_visible_doc(doc_id, access)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
 
@@ -1219,7 +1238,7 @@ def reclassify_document(
 @router.get("/knowledge-vault/documents/{doc_id}/vectors")
 def get_document_vectors(doc_id: str, access: WorkspaceAccess = Depends(require_workspace_member)):
     """Retrieves all vector chunks, token counts, and linked list pointers for a specific document."""
-    doc = _find_doc_record(doc_id, access.workspace_id)
+    doc = _find_visible_doc(doc_id, access)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
 
@@ -1310,7 +1329,7 @@ def get_document_vectors(doc_id: str, access: WorkspaceAccess = Depends(require_
 @router.get("/knowledge-vault/documents/{doc_id}/content")
 def get_document_content(doc_id: str, access: WorkspaceAccess = Depends(require_workspace_member)):
     """Returns the complete unfragmented markdown/text content of the document."""
-    doc = _find_doc_record(doc_id, access.workspace_id)
+    doc = _find_visible_doc(doc_id, access)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
 
@@ -1336,7 +1355,7 @@ def download_raw_document(doc_id: str, access: WorkspaceAccess = Depends(require
     """Streams and downloads the original raw file from storage."""
     # Workspace check FIRST — raw files are keyed by doc_id only, so
     # without this a caller could download another workspace's file by id.
-    doc = _find_doc_record(doc_id, access.workspace_id)
+    doc = _find_visible_doc(doc_id, access)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
 
@@ -1360,7 +1379,7 @@ def download_raw_document(doc_id: str, access: WorkspaceAccess = Depends(require
 @router.delete("/knowledge-vault/documents/{doc_id}")
 def delete_document(doc_id: str, access: WorkspaceAccess = Depends(require_workspace_member)):
     """Deletes a document and purges all its vector embeddings and raw files (uploader or workspace owner/admin)."""
-    doc = _find_doc_record(doc_id, access.workspace_id)
+    doc = _find_visible_doc(doc_id, access)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
     require_writer(access)
@@ -1388,9 +1407,11 @@ def reindex_document(
     """Re-triggers chunking and vector indexing using the stored complete document."""
     require_writer(access)
     _reject_if_backlogged()
-    doc = _find_doc_record(doc_id, access.workspace_id)
+    doc = _find_visible_doc(doc_id, access)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
+    if is_connector_source(doc.get("source")):
+        return _reindex_synced_document(doc)
 
     # Remove the old vectors and their fingerprints, so unchanged content is embedded again
     _drop_index(doc)
@@ -1433,6 +1454,47 @@ def reindex_document(
     return {
         "status": "success",
         "message": f"Document '{filename}' queued for full re-indexing with complete unfragmented content.",
+        "document": doc,
+    }
+
+
+def _reindex_synced_document(doc: dict[str, Any]) -> dict[str, Any]:
+    """Embed a synced document again from the text stored when it was synced. The provider keeps the original,
+    so there is nothing to parse or classify again, and it stays its rep's: same pipeline id, same private ACL."""
+    doc_id = doc["doc_id"]
+    if not raw_document_store.get_full_text(doc_id):
+        raise HTTPException(
+            status_code=409,
+            detail="The text of this synced document isn't stored any more. Sync the app again to bring it back.",
+        )
+    source = str(doc.get("source") or "").lower()
+    owner = str(doc.get("user_id") or "")
+    lineage = canonical_store.get_document(doc_id)
+
+    _drop_index(doc)
+    doc["status"] = "Parsing"
+    doc["chunks"] = 0
+    doc["last_updated"] = datetime.now(timezone.utc).isoformat()
+    _save_doc_record(doc)
+
+    ingest_queue.enqueue(
+        JOB_DOCUMENT_EMBED,
+        {
+            "doc_id": doc_id,
+            "canonical_doc_id": doc_id,
+            "text_ref": doc_id,
+            "external_id": (doc.get("metadata") or {}).get("external_id") or doc_id,
+            "tenant_id": doc.get("tenant_id", ""),
+            "user_id": owner,
+            "source": source,
+            "mime_type": "text/plain",
+            "acl": chunk_acl(source, owner, lineage.acl if lineage else []),
+            "metadata": dict(doc.get("metadata") or {}),
+        },
+    )
+    return {
+        "status": "success",
+        "message": f"Document '{doc.get('name', doc_id)}' queued for re-indexing from its synced text.",
         "document": doc,
     }
 
@@ -1528,7 +1590,9 @@ def deduplicate_documents(
             detail="Only a workspace owner/admin can remove duplicate documents.",
         )
 
-    docs = _list_doc_records(access.workspace_id)
+    # Synced documents mirror each rep's own apps: they aren't duplicates of anything, and listing them here
+    # would show other reps' email subjects and file names.
+    docs = [d for d in _list_doc_records(access.workspace_id) if not is_connector_source(d.get("source"))]
     plan = plan_deduplication(docs)
 
     removed: list[str] = []

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+from module_1_document_processing.connector_privacy import document_id
 from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent
 
 try:
@@ -56,7 +57,7 @@ class CanonicalStore:
     # ---- helpers ---------------------------------------------------------
     @staticmethod
     def _doc_id(event: CanonicalEvent) -> str:
-        return f"{event.tenant_id}:{event.source}:{event.external_id}"
+        return document_id(event.tenant_id, event.source, event.user_id, event.external_id)
 
     @staticmethod
     def _event_type_str(event: CanonicalEvent) -> str:
@@ -241,14 +242,17 @@ class CanonicalStore:
         tenant_id: str,
         source: str = "",
         exclude_statuses: tuple[str, ...] = ("DELETED",),
+        user_id: str = "",
     ) -> list[StagedDocument]:
-        """Documents for a tenant (optionally one source). Used by the reconciliation sweeper."""
+        """Documents for a tenant (optionally one source, one rep's). Used by the reconciliation sweeper."""
         if self._db:
             try:
                 with session_scope() as session:
                     stmt = select(RagDocument).where(RagDocument.tenant_id == tenant_id)
                     if source:
                         stmt = stmt.where(RagDocument.source == source)
+                    if user_id:
+                        stmt = stmt.where(RagDocument.user_id == user_id)
                     if exclude_statuses:
                         stmt = stmt.where(RagDocument.status.notin_(list(exclude_statuses)))
                     rows = session.execute(stmt).scalars().all()
@@ -261,6 +265,7 @@ class CanonicalStore:
             for doc in self._store.values()
             if doc.tenant_id == tenant_id
             and (not source or doc.source == source)
+            and (not user_id or doc.user_id == user_id)
             and doc.status not in (exclude_statuses or ())
         ]
 

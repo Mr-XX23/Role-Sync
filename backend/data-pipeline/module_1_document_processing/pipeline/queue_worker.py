@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import os
 from typing import Any, Callable
+from module_1_document_processing.connector_privacy import chunk_acl, document_id
 from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent, EventType
 from module_1_document_processing.security.security_scanner import SecurityScanner, ScanResult
 from module_1_document_processing.pipeline.canonical_store import CanonicalStore
@@ -204,7 +205,7 @@ class QueueWorker:
             replay_payload = {k: v for k, v in payload.items() if k != "skip_gatekeeper"}
             await asyncio.to_thread(
                 gatekeeper_store.attach_replay,
-                f"{event.tenant_id}:{event.source}:{event.external_id}",
+                document_id(event.tenant_id, event.source, event.user_id, event.external_id),
                 {"kind": JOB_CONNECTOR_EVENT, "payload": replay_payload},
                 event.tenant_id,
             )
@@ -239,7 +240,7 @@ class QueueWorker:
             from module_1_document_processing import knowledge_vault_routes as vault
             from module_1_document_processing.raw_document_store import raw_document_store
 
-            doc_id = f"{event.tenant_id}:{event.source}:{event.external_id}"
+            doc_id = document_id(event.tenant_id, event.source, event.user_id, event.external_id)
             text_content = parsed_doc.text_content or ""
             if not text_content:
                 return "empty"
@@ -322,7 +323,7 @@ class QueueWorker:
 
     async def _process_event(self, event: CanonicalEvent, skip_gatekeeper: bool = False) -> str:
         print(f"[QueueWorker] Processing event_id={event.event_id} type={event.event_type} from source={event.source}")
-        doc_id = f"{event.tenant_id}:{event.source}:{event.external_id}"
+        doc_id = document_id(event.tenant_id, event.source, event.user_id, event.external_id)
 
         # 1. Security Scan & Sanitization
         scan_res: ScanResult = self.scanner.scan_and_sanitize_event(event)
@@ -398,13 +399,11 @@ class QueueWorker:
         self.store.record_event(sanitized_event, status="GATEKEEPER_ACCEPTED")
 
         # Connector normalizers set provider-native ACLs (a mailbox owner's email,
-        # a Slack sender id). Knowledge-vault search filters on the workspace and
-        # caller identity, so without these markers connector documents are
-        # indexed but unreachable - Gmail in particular was invisible to search.
-        workspace_acl = [f"tenant:{sanitized_event.tenant_id}", f"user:{sanitized_event.user_id}"]
-        for marker in workspace_acl:
-            if marker not in parsed_doc.acl:
-                parsed_doc.acl.append(marker)
+        # a Slack sender id). Knowledge-vault search filters on the caller's identity,
+        # so the rep who synced the document is added; without it connector documents
+        # are indexed but unreachable. The workspace is deliberately not: synced
+        # documents are private to their rep (connector_privacy).
+        parsed_doc.acl = chunk_acl(sanitized_event.source, sanitized_event.user_id, parsed_doc.acl or [])
 
         # 5. Persist the text and classify. This is the embedding stage's input,
         # so if it fails the event is retried rather than queuing an empty job.
