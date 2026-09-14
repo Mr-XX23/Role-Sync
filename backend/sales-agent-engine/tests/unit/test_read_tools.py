@@ -355,8 +355,9 @@ async def test_inventory_check_against_a_needed_quantity():
         "/api/v1/catalog/variants/TEE-L/availability": {
             "sku": "TEE-L", "total_available": 40,
             "by_location": [
-                {"location_name": "Kathmandu", "sellable": True, "qty_available": 40},
-                {"location_name": "Returns", "sellable": False, "qty_available": 0},
+                {"location_name": "Kathmandu", "sellable": True, "qty_on_hand": 45, "qty_reserved": 5, "qty_available": 40},
+                {"location_name": "Returns", "sellable": False, "qty_on_hand": 3, "qty_reserved": 0, "qty_available": 0},
+                {"location_name": "Pokhara", "sellable": True, "qty_on_hand": 0, "qty_reserved": 0, "qty_available": 0},
             ],
         }
     }
@@ -367,8 +368,15 @@ async def test_inventory_check_against_a_needed_quantity():
     assert sorted(request.url.path for request in seen) == [
         "/api/v1/catalog/variants/NOPE/availability", "/api/v1/catalog/variants/TEE-L/availability"
     ]
+    # On hand and reserved per location too (a count correction needs the on-hand figure); empty locations are left out.
     assert output.data["items"] == [
-        {"sku": "TEE-L", "found": True, "available": 40, "can_fulfill": False, "locations": [{"location": "Kathmandu", "available": 40}]},
+        {
+            "sku": "TEE-L", "found": True, "available": 40, "can_fulfill": False,
+            "locations": [
+                {"location": "Kathmandu", "on_hand": 45, "reserved": 5, "available": 40, "sellable": True},
+                {"location": "Returns", "on_hand": 3, "reserved": 0, "available": 0, "sellable": False},
+            ],
+        },
         {"sku": "NOPE", "found": False},
     ]
     assert output.summary == "Stock for 2 SKUs: 0 of 1 can supply 50, 1 not found"

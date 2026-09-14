@@ -141,6 +141,22 @@ def upsert_category(
     return service.upsert_category(ctx.tenant_id, data)
 
 
+@router.delete("/categories/{key}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_category(
+    key: str,
+    ctx: CatalogContext = Depends(get_catalog_writer_context),
+    service: ProductService = Depends(get_service),
+):
+    """Remove a category that no product uses and that isn't the parent of another category."""
+    try:
+        found = service.delete_category(ctx.tenant_id, key)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    if not found:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Category '{key}' not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 # ---------------------------------------------------------------------------
 # Products Endpoints
 # ---------------------------------------------------------------------------
@@ -559,6 +575,7 @@ def list_stock_movements(
     date_from: Optional[datetime] = Query(None, description="Inclusive"),
     date_to: Optional[datetime] = Query(None, description="Exclusive"),
     include_holds: bool = Query(False, description="Include reservation holds (RESERVE, RELEASE)"),
+    ref_id: Optional[UUID] = Query(None, description="Only the rows of one action, e.g. a reservation_id"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     ctx: CatalogContext = Depends(get_catalog_context),
@@ -574,6 +591,7 @@ def list_stock_movements(
             date_from=date_from,
             date_to=date_to,
             include_holds=include_holds,
+            ref_id=ref_id,
             limit=limit,
             offset=offset,
         )

@@ -93,6 +93,13 @@ def describe_action(tool: str, args: Any) -> tuple[str, str]:
         "create_catalog_item": (f"Add catalog item: {text('name')}", "CATALOG_CHANGE"),
         "update_catalog_item": ("Update catalog item", "CATALOG_CHANGE"),
         "retire_catalog_item": ("Retire catalog item", "CATALOG_CHANGE"),
+        "restore_catalog_item": ("Restore a retired catalog item", "CATALOG_CHANGE"),
+        "add_catalog_skus": (f"Add {len(fields.get('skus') or [])} SKU(s) to a catalog item", "CATALOG_CHANGE"),
+        "save_catalog_category": (f"Save catalog category: {text('label')}", "CATALOG_CHANGE"),
+        "delete_catalog_category": (f"Remove catalog category: {text('key')}", "CATALOG_CHANGE"),
+        "create_stock_location": (f"Add stock location: {text('name')}", "INVENTORY_CHANGE"),
+        "update_stock_location": (f"Update stock location: {text('location')}", "INVENTORY_CHANGE"),
+        "delete_stock_location": (f"Remove stock location: {text('location')}", "INVENTORY_CHANGE"),
         "record_stock_movement": (
             f"Stock {text('type').lower() or 'movement'}: {fields.get('quantity')} × {text('sku')}",
             "INVENTORY_CHANGE",

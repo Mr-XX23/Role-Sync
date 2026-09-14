@@ -27,6 +27,8 @@ class ToolScope(StrEnum):
     READ = "READ"
     COMMUNICATION = "COMMUNICATION"  # send email, post message, calendar invite, notion write
     CATALOG = "CATALOG"  # catalog + inventory writes, reservations
+    # categories, stock locations, SKUs of existing items, restoring retired items (the coordinator only)
+    CATALOG_SETUP = "CATALOG_SETUP"
     DOCUMENT = "DOCUMENT"  # document generation, drive / KB storage, quotes
     CRM = "CRM"  # deal records
     KNOWLEDGE = "KNOWLEDGE"  # adding, changing and deleting knowledge-base documents (the coordinator only)

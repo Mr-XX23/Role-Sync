@@ -361,6 +361,26 @@ def test_history_is_newest_first_and_filters_by_product_location_reason_and_date
         service.list_movements(tenant, reasons=["STOLEN"])
 
 
+def test_history_narrows_to_the_rows_of_one_action(service, env):
+    tenant = env["tenant"]
+    opening_stock(service, env, 10)
+    opening_stock(service, env, 10, at="store")
+    shipment = record(service, env, "SHIPPED", 2, to="store")  # main 8, store 12
+    held = service.reserve(tenant, "CHAIR-BLK", 15)  # no one location has 15: 8 at main, 7 at the store
+    service.reserve(tenant, "CHAIR-BLK", 1)
+
+    shipped = service.list_movements(tenant, ref_id=shipment.ref_id)
+    assert sorted(row.type for row in shipped.items) == ["SHIPPED_IN", "SHIPPED_OUT"]
+    # A reservation's holds are only listed when asked for, like any hold.
+    assert service.list_movements(tenant, ref_id=held.reservation_id).total == 0
+    holds = service.list_movements(tenant, ref_id=held.reservation_id, reasons=["RESERVE", "RELEASE"])
+    assert sorted((row.location_name, row.delta) for row in holds.items) == [("City Store", 7), ("Main Warehouse", 8)]
+
+    service.release(tenant, held.reservation_id)
+    released = service.list_movements(tenant, ref_id=held.reservation_id, reasons=["RELEASE"])
+    assert sum(row.delta for row in released.items) == 15
+
+
 def test_summary_totals_each_kind_of_event_per_location(service, env):
     tenant = env["tenant"]
     opening_stock(service, env, 50)

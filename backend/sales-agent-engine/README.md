@@ -18,6 +18,7 @@ approval before any real-world action.
 | 4 | Context manager (prompt budget, summaries, offloaded results), versioned memory with optimistic locking (rep, customer, deal, conversation), deals in workspace-service, "what the agent remembers" review | done |
 | 5 | Sub-agents: research, outreach and quote, handed work with `delegate`, each scoped at the gate, result-only back to the planner | done |
 | — | Skills: playbooks the agent follows (10 built in, workspace and private skills, per-rep switches, versions, SKILL.md import/export, AI drafts, usage), loaded with `use_skill`, picked in chat or handed to sub-agents | done |
+| — | The app's features as tools: knowledge vault (add pages, classify, re-index, delete) and catalog + inventory (listing, SKUs and options, categories, stock locations, reservations, restoring retired items) | done; profile and connectors next |
 | 6 | Autonomy layer | next |
 
 ## Layout
@@ -82,10 +83,13 @@ outcome is unknown (timeout, dropped connection) is reported as UNKNOWN and neve
 | `create_notion_page` | write; undo moves it to the trash | Composio Notion |
 | `generate_document` | write: docx, pptx, xlsx, pdf or md; undo trashes / deletes the file | rendered in the engine; saved to Google Drive (Composio), else the workspace knowledge vault |
 | `create_quote` | write: catalog prices, per-line discounts within each item's limit, totals, optional stock reservation; undo removes the file and releases stock | data-pipeline catalog + document storage as above |
-| `create_catalog_item`, `update_catalog_item`, `retire_catalog_item` | write; undo retires / restores the replaced values / restores the status | data-pipeline catalog (never hard-deletes) |
+| `create_catalog_item`, `update_catalog_item`, `retire_catalog_item` | write: an item with its options and SKUs; its details, discount limits and each SKU's price, currency, barcode, weight or status; undo retires / restores the replaced values / restores the status | data-pipeline catalog (never hard-deletes) |
+| `add_catalog_skus`, `restore_catalog_item` | write (coordinator only): new SKUs for an existing item, adding option values they need without unlinking the other SKUs; a retired item back with all or some SKUs; undo retires the new SKUs / retires the item again | data-pipeline catalog |
+| `save_catalog_category`, `delete_catalog_category` | write (coordinator only): add or rename a category; remove one only while no item (retired ones included) uses it and no category sits under it; undo removes / renames back / adds it back | data-pipeline catalog categories |
+| `create_stock_location`, `update_stock_location`, `delete_stock_location` | write (coordinator only): add a location, change its name, type, sellable flag, priority, city or country (warned when stock stops counting as available); remove one only if it never held stock, since that would erase its history; undo removes it while unused / restores the old details / adds it back | data-pipeline catalog locations |
 | `record_stock_movement` | write: received, sold, shipped, damaged, lost or returned stock, checked against available units first; only a shipment can be undone (shipped back once) | data-pipeline inventory movements |
 | `correct_stock_count` | write: replace a count with a note; workspace owners and admins only, refused before approval for anyone else; undo restores the count unless stock moved since | data-pipeline inventory movements |
-| `reserve_stock`, `release_stock` | write; undo releases the reservation (a release can't be undone) | data-pipeline inventory |
+| `reserve_stock`, `release_stock` | write; a release is checked against the reservation before approval; undo releases the reservation (a release can't be undone) | data-pipeline inventory |
 | `add_web_page_to_knowledge_base` | write (coordinator only): a public page, checked for an internal address before approval; the same address again refreshes it, keeping its name and category; undo deletes a page it added (after waiting for processing to finish) | data-pipeline knowledge vault (`ingest-url`, public addresses only) |
 | `update_knowledge_document`, `reclassify_knowledge_document` | write (coordinator only): correct the category, competitor, industry, summary or tags, or have the classifier decide again; undo restores the previous values | data-pipeline knowledge vault |
 | `reindex_knowledge_document` | write (coordinator only): rebuild the search index from the stored content; nothing to undo | data-pipeline knowledge vault |
@@ -101,7 +105,9 @@ outcome is unknown (timeout, dropped connection) is reported as UNKNOWN and neve
 | `search_knowledge_base`, `read_knowledge_document` | read | data-pipeline knowledge vault: semantic search, with keyword retrieval in the adapter when it is unavailable |
 | `list_knowledge_documents` | read: every document in any state, with why one isn't searchable and whether the rep added it | data-pipeline knowledge vault |
 | `stock_history` | read: movements newest first, with totals per location | data-pipeline inventory movements |
-| `search_catalog`, `check_inventory` | read | data-pipeline catalog |
+| `list_stock_reservations` | read: open (or also released) reservations with quantity per location and whether the rep made them | data-pipeline inventory movements (holds) |
+| `search_catalog`, `check_inventory` | read: ranked search; stock available in total and on hand, reserved and available per location | data-pipeline catalog |
+| `list_catalog_items`, `get_catalog_item`, `describe_catalog` | read: filtered item lists (status, category, type, price, stock) with SKUs; one item with options, SKUs and stock per location; the categories, stock locations and option names | data-pipeline catalog |
 | `web_search` | read | Tavily pages + Google Search grounding (Gemini) |
 | `research_prospect` | read | web search, condensed into a cited brief by the low-complexity route (OpenRouter) |
 | `delegate` | hands a piece of work to a sub-agent (the coordinator only); no approval, audited | the engine's own sub-agents |
@@ -111,8 +117,9 @@ outcome is unknown (timeout, dropped connection) is reported as UNKNOWN and neve
 
 Connector tools are denied (not failed) when the user hasn't connected that app. Results carry
 `sources` (web pages, message and page links, or links to what a write created), which the chat UI
-shows under each step. Catalog, stock and knowledge-base writes are denied to workspace viewers, and
-knowledge-base writes need the KNOWLEDGE scope, which no sub-agent has. Every executed write's result
+shows under each step. Catalog, stock and knowledge-base writes are denied to workspace viewers;
+knowledge-base writes need the KNOWLEDGE scope and catalog setup (categories, locations, SKUs of existing
+items, restoring items) the CATALOG_SETUP scope, which no sub-agent has. Every executed write's result
 includes an `action_id`, which `undo_actions` takes.
 
 ## Guardrails

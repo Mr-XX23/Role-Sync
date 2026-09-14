@@ -202,6 +202,40 @@ const QuotePreview: React.FC<{ preview: Preview }> = ({ preview }) => {
   );
 };
 
+/** "Size: S, M · Color: Black" from ``[{name, values}]``. */
+const optionAxes = (value: unknown): string =>
+  list(value)
+    .map(record)
+    .map((axis) => `${text(axis.name)}: ${list(axis.values).map(text).join(', ')}`)
+    .join(' · ');
+
+/** "M / Black" from a SKU's ``[{name, value}]``. */
+const skuOptions = (value: unknown): string =>
+  list(value)
+    .map(record)
+    .map((choice) => text(choice.value))
+    .join(' / ');
+
+/** New SKUs: code, option values if the item has options, price, and barcode when one is given. */
+const SkuTable: React.FC<{ skus: unknown }> = ({ skus }) => {
+  const rows = list(skus).map(record);
+  const withOptions = rows.some((sku) => list(sku.options).length > 0);
+  const withBarcodes = rows.some((sku) => text(sku.barcode));
+  const columns = ['SKU', ...(withOptions ? ['Options'] : []), 'Price', ...(withBarcodes ? ['Barcode'] : [])];
+  return (
+    <DataTable
+      columns={columns}
+      numeric={[withOptions ? 2 : 1]}
+      rows={rows.map((sku) => [
+        <span className="font-mono">{text(sku.sku)}</span>,
+        ...(withOptions ? [skuOptions(sku.options) || '—'] : []),
+        money(sku.currency, sku.price),
+        ...(withBarcodes ? [<span className="font-mono">{text(sku.barcode) || '—'}</span>] : []),
+      ])}
+    />
+  );
+};
+
 const CatalogItemPreview: React.FC<{ preview: Preview }> = ({ preview }) => {
   const item = record(preview.item);
   return (
@@ -210,20 +244,33 @@ const CatalogItemPreview: React.FC<{ preview: Preview }> = ({ preview }) => {
       <PreviewRow label="Type" value={`${text(item.type)} · ${text(item.category)}${item.subcategory ? ` / ${text(item.subcategory)}` : ''}`} />
       <PreviewRow label="Status" value={text(item.status)} />
       <PreviewRow label="Discounts" value={`${text(item.min_discount_pct)}% – ${text(item.max_discount_pct)}%`} />
+      {list(preview.options).length > 0 && <PreviewRow label="Options" value={optionAxes(preview.options)} />}
       {text(item.description) && <TextBlock value={text(item.description)} />}
-      {list(preview.variants).length > 0 && (
-        <DataTable
-          columns={['SKU', 'Price']}
-          numeric={[1]}
-          rows={list(preview.variants).map((raw) => {
-            const variant = record(raw);
-            return [<span className="font-mono">{text(variant.sku)}</span>, money(variant.currency, variant.price)];
-          })}
-        />
-      )}
+      {list(preview.variants).length > 0 && <SkuTable skus={preview.variants} />}
     </div>
   );
 };
+
+const CatalogSkusPreview: React.FC<{ preview: Preview }> = ({ preview }) => (
+  <div className="space-y-2 text-sm">
+    <PreviewRow label="Item" value={<span className="font-semibold">{text(preview.name)}</span>} />
+    <SkuTable skus={preview.skus} />
+    {list(preview.new_option_values).length > 0 && <PreviewRow label="New values" value={optionAxes(preview.new_option_values)} />}
+    {list(preview.warnings).length > 0 && <Warning>{list(preview.warnings).map(text).join('; ')}</Warning>}
+    <p className="text-xs text-muted-foreground">The item’s other SKUs keep their options. SKUs can’t be deleted, so undoing retires these.</p>
+  </div>
+);
+
+const CatalogRestorePreview: React.FC<{ preview: Preview }> = ({ preview }) => (
+  <div className="space-y-2 text-sm">
+    <PreviewRow label="Item" value={<span className="font-semibold">{text(preview.name)}</span>} />
+    <PreviewRow label="Status" value={<BeforeAfter before="RETIRED" after={preview.status} />} />
+    <PreviewRow label="Sold again" value={list(preview.skus).map(text).join(', ') || 'No SKUs'} />
+    {list(preview.staying_retired).length > 0 && <PreviewRow label="Stay retired" value={list(preview.staying_retired).map(text).join(', ')} />}
+    {list(preview.warnings).length > 0 && <Warning>{list(preview.warnings).map(text).join('; ')}</Warning>}
+    <p className="text-xs text-muted-foreground">Undoing retires it again.</p>
+  </div>
+);
 
 const BeforeAfter: React.FC<{ before: unknown; after: unknown }> = ({ before, after }) => (
   <span>
@@ -251,6 +298,25 @@ const CatalogUpdatePreview: React.FC<{ preview: Preview }> = ({ preview }) => (
         })}
       />
     )}
+    {list(preview.sku_changes).length > 0 && (
+      <DataTable
+        columns={['SKU', 'Field', 'Change']}
+        rows={list(preview.sku_changes).map((raw) => {
+          const change = record(raw);
+          const price = text(change.field) === 'price';
+          return [
+            <span className="font-mono">{text(change.sku)}</span>,
+            text(change.field),
+            price ? (
+              <BeforeAfter before={money(change.currency, change.before)} after={money(change.currency, change.after)} />
+            ) : (
+              <BeforeAfter before={change.before} after={change.after} />
+            ),
+          ];
+        })}
+      />
+    )}
+    {/* Cards saved before per-SKU changes list prices only. */}
     {list(preview.price_changes).length > 0 && (
       <DataTable
         columns={['SKU', 'Price']}
@@ -263,8 +329,85 @@ const CatalogUpdatePreview: React.FC<{ preview: Preview }> = ({ preview }) => (
         })}
       />
     )}
+    {list(preview.warnings).length > 0 && <Warning>{list(preview.warnings).map(text).join('; ')}</Warning>}
   </div>
 );
+
+const LOCATION_TYPE: Record<string, string> = { WAREHOUSE: 'Warehouse', STORE: 'Store', SUPPLIER: 'Supplier', IN_TRANSIT: 'In transit' };
+
+const locationValue = (field: string, value: unknown): unknown => {
+  if (field === 'type') return LOCATION_TYPE[text(value)] ?? value;
+  if (field === 'sellable' && typeof value === 'boolean') return value ? 'Sellable' : 'Not sellable';
+  return value;
+};
+
+const CategoryPreview: React.FC<{ preview: Preview }> = ({ preview }) => {
+  const before = record(preview.before);
+  const action = text(preview.action);
+  return (
+    <div className="space-y-2 text-sm">
+      <PreviewRow label="Key" value={<span className="font-mono text-xs">{text(preview.key)}</span>} />
+      {action === 'update' ? (
+        <>
+          <PreviewRow label="Label" value={<BeforeAfter before={before.label} after={preview.label} />} />
+          {text(before.parent_key) !== text(preview.parent_key) && (
+            <PreviewRow label="Parent" value={<BeforeAfter before={before.parent_key || '(none)'} after={preview.parent_key || '(none)'} />} />
+          )}
+        </>
+      ) : (
+        <>
+          <PreviewRow label="Label" value={<span className="font-semibold">{text(preview.label)}</span>} />
+          {text(preview.parent_key) && <PreviewRow label="Parent" value={text(preview.parent_key)} />}
+        </>
+      )}
+      <p className="text-xs text-muted-foreground">
+        {action === 'delete'
+          ? 'No item uses this category. Undoing adds it back.'
+          : action === 'update'
+            ? 'Items keep the category; only its name changes. Undoing puts the old name back.'
+            : 'Undoing removes it again while no item uses it.'}
+      </p>
+    </div>
+  );
+};
+
+const LocationPreview: React.FC<{ preview: Preview }> = ({ preview }) => {
+  const action = text(preview.action);
+  if (action === 'update') {
+    return (
+      <div className="space-y-2 text-sm">
+        <PreviewRow label="Location" value={<span className="font-semibold">{text(preview.name)}</span>} />
+        <DataTable
+          columns={['Field', 'Change']}
+          rows={list(preview.changes).map((raw) => {
+            const change = record(raw);
+            const field = text(change.field);
+            return [field, <BeforeAfter before={locationValue(field, change.before)} after={locationValue(field, change.after)} />];
+          })}
+        />
+        {list(preview.warnings).length > 0 && <Warning>{list(preview.warnings).map(text).join('; ')}</Warning>}
+        <p className="text-xs text-muted-foreground">Undoing puts the previous details back.</p>
+      </div>
+    );
+  }
+  const location = record(preview.location);
+  const address = record(location.address);
+  const place = [address.city, address.country].map(text).filter(Boolean).join(', ');
+  return (
+    <div className="space-y-2 text-sm">
+      <PreviewRow label="Location" value={<span className="font-semibold">{text(location.name ?? preview.name)}</span>} />
+      <PreviewRow label="Type" value={text(locationValue('type', location.type))} />
+      <PreviewRow label="Stock" value={location.sellable === false ? 'Not sellable' : 'Can be sold and reserved'} />
+      <PreviewRow label="Priority" value={`${text(location.priority)} (lower is used first)`} />
+      {place && <PreviewRow label="Where" value={place} />}
+      <p className="text-xs text-muted-foreground">
+        {action === 'delete'
+          ? 'It has never held stock, so no history is lost. Undoing adds it back as a new location.'
+          : 'Undoing removes it again, as long as it hasn’t held stock.'}
+      </p>
+    </div>
+  );
+};
 
 const RetirePreview: React.FC<{ preview: Preview }> = ({ preview }) => (
   <div className="space-y-2 text-sm">
@@ -335,12 +478,33 @@ const ReservationPreview: React.FC<{ preview: Preview }> = ({ preview }) => (
   </div>
 );
 
-const ReleasePreview: React.FC<{ preview: Preview }> = ({ preview }) => (
-  <div className="space-y-2 text-sm">
-    <PreviewRow label="Reservation" value={<span className="font-mono text-xs">{text(preview.reservation_id)}</span>} />
-    <p className="text-xs text-muted-foreground">The held units become available to sell again. This can’t be undone.</p>
-  </div>
-);
+const ReleasePreview: React.FC<{ preview: Preview }> = ({ preview }) => {
+  const locations = list(preview.locations).map(record);
+  return (
+    <div className="space-y-2 text-sm">
+      {text(preview.sku) && (
+        <PreviewRow
+          label="SKU"
+          value={
+            <span>
+              <span className="font-mono">{text(preview.sku)}</span>
+              {text(preview.product) && <span className="text-muted-foreground"> · {text(preview.product)}</span>}
+            </span>
+          }
+        />
+      )}
+      {text(preview.quantity) && <PreviewRow label="Quantity" value={text(preview.quantity)} />}
+      {locations.length > 0 && (
+        <PreviewRow label="Held at" value={locations.map((place) => `${text(place.quantity)} at ${text(place.location)}`).join(', ')} />
+      )}
+      {preview.reserved_by_you !== undefined && (
+        <PreviewRow label="Held by" value={preview.reserved_by_you ? 'You' : 'Someone else in the workspace'} />
+      )}
+      <PreviewRow label="Reservation" value={<span className="font-mono text-xs">{text(preview.reservation_id)}</span>} />
+      <p className="text-xs text-muted-foreground">The held units become available to sell again. This can’t be undone.</p>
+    </div>
+  );
+};
 
 const DealCreatePreview: React.FC<{ preview: Preview }> = ({ preview }) => {
   const deal = record(preview.deal);
@@ -583,6 +747,14 @@ export const PreviewBody: React.FC<{ card: ApprovalCardModel }> = ({ card }) => 
       return <CatalogUpdatePreview preview={preview} />;
     case 'catalog_retire':
       return <RetirePreview preview={preview} />;
+    case 'catalog_restore':
+      return <CatalogRestorePreview preview={preview} />;
+    case 'catalog_skus':
+      return <CatalogSkusPreview preview={preview} />;
+    case 'catalog_category':
+      return <CategoryPreview preview={preview} />;
+    case 'stock_location':
+      return <LocationPreview preview={preview} />;
     case 'stock_change':
       return <StockPreview preview={preview} />;
     case 'stock_movement':

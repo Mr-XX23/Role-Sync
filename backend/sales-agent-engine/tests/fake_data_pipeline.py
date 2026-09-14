@@ -36,6 +36,7 @@ def _detail(status: int, message: str) -> httpx.Response:
 @dataclass
 class FakeDataPipeline:
     categories: set[str] = field(default_factory=lambda: {"software", "apparel"})
+    category_details: dict[str, dict[str, Any]] = field(default_factory=dict)  # key → {label, parent_key}, when not the defaults
     locations: list[dict[str, Any]] = field(
         default_factory=lambda: [{"id": MAIN_WAREHOUSE, "name": "Main warehouse", "sellable": True, "priority": 1}]
     )
@@ -95,6 +96,8 @@ class FakeDataPipeline:
             "min_discount_pct": "0.00",
             "max_discount_pct": max_discount_pct,
             "keywords": [],
+            "options": [],
+            "created_at": self._now(),
             "variants": [
                 {
                     "id": variant_id,
@@ -114,6 +117,47 @@ class FakeDataPipeline:
             self.stock[(variant_id, location)] = {"on_hand": on_hand, "reserved": 0}
         return product
 
+    def add_item(
+        self,
+        *,
+        name: str,
+        options: dict[str, list[str]],
+        skus: list[tuple[str, str, dict[str, str]]],
+        status: str = "ACTIVE",
+        category: str = "apparel",
+    ) -> dict[str, Any]:
+        """An item with option axes and SKUs linked to their values: ``skus`` is ``[(sku, price, {option: value})]``."""
+        product_id = str(uuid4())
+        axes = [
+            {"id": str(uuid4()), "name": axis, "position": index, "values": []}
+            for index, axis in enumerate(options)
+        ]
+        for axis in axes:
+            axis["values"] = [
+                {"id": str(uuid4()), "option_id": axis["id"], "value": value, "position": order}
+                for order, value in enumerate(options[axis["name"]])
+            ]
+        by_choice = {(axis["name"], value["value"]): value for axis in axes for value in axis["values"]}
+        product = {
+            "id": product_id, "name": name, "type": "PRODUCT", "category": category, "status": status,
+            "description": f"{name} description", "min_discount_pct": "0.00", "max_discount_pct": "10.00", "keywords": [],
+            "options": axes, "created_at": self._now(),
+            "variants": [
+                {
+                    "id": str(uuid4()), "product_id": product_id, "sku": sku, "barcode": None, "price": price, "currency": "USD",
+                    "weight": None, "status": "RETIRED" if status == "RETIRED" else "ACTIVE",
+                    "option_values": [dict(by_choice[(axis, value)]) for axis, value in choice.items()],
+                }
+                for sku, price, choice in skus
+            ],
+        }
+        self.products[product_id] = product
+        return product
+
+    def _now(self) -> str:
+        self._ticks = getattr(self, "_ticks", 0) + 1
+        return f"2026-09-01T10:{self._ticks // 60:02d}:{self._ticks % 60:02d}+00:00"
+
     def client(self) -> DataPipelineClient:
         return DataPipelineClient(base_url=_BASE, http=httpx.AsyncClient(transport=self.transport()))
 
@@ -129,6 +173,75 @@ class FakeDataPipeline:
 
     def paths(self, method: str | None = None) -> list[str]:
         return [path for verb, path, _ in self.requests if method is None or verb == method]
+
+    def _category(self, key: str) -> dict[str, Any]:
+        details = self.category_details.get(key, {})
+        return {"key": key, "label": details.get("label", key.title()), "parent_key": details.get("parent_key")}
+
+    @staticmethod
+    def _location_fields(body: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "name": body["name"], "type": body.get("type", "WAREHOUSE"), "sellable": body.get("sellable", True),
+            "priority": body.get("priority", 100), "address": body.get("address"),
+        }
+
+    def _availability(self, variant: dict[str, Any]) -> dict[str, Any]:
+        levels = [
+            {
+                "location_id": location["id"],
+                "location_name": location["name"],
+                "sellable": location["sellable"],
+                "qty_on_hand": level["on_hand"],
+                "qty_reserved": level["reserved"],
+                # Like data-pipeline: stock at a location that isn't sellable is never available.
+                "qty_available": max(0, level["on_hand"] - level["reserved"]) if location["sellable"] else 0,
+            }
+            for location in self.locations
+            if (level := self.stock.get((variant["id"], location["id"])))
+        ]
+        return {"variant_id": variant["id"], "sku": variant["sku"], "total_available": sum(l["qty_available"] for l in levels), "by_location": levels}
+
+    def _list_products(self, params: httpx.QueryParams) -> list[dict[str, Any]]:
+        """GET /catalog/products: the filters, newest first; one SKU must match the price and stock filters."""
+        in_stock = params.get("in_stock") == "true"
+
+        def sku_matches(variant: dict[str, Any]) -> bool:
+            price = Decimal(str(variant["price"]))
+            if params.get("min_price") and price < Decimal(params["min_price"]):
+                return False
+            if params.get("max_price") and price > Decimal(params["max_price"]):
+                return False
+            if in_stock:
+                return any(
+                    location["sellable"] and (level := self.stock.get((variant["id"], location["id"]))) and level["on_hand"] > level["reserved"]
+                    for location in self.locations
+                    if not params.get("location_id") or location["id"] == params["location_id"]
+                )
+            return True
+
+        keywords = (params.get("keywords") or "").lower()
+        rows = [
+            product
+            for product in self.products.values()
+            if all(not params.get(key) or product.get(key) == params[key] for key in ("status", "category", "type"))
+            and (not keywords or keywords in f"{product.get('name')} {product.get('description')}".lower())
+            and (not any(params.get(key) for key in ("min_price", "max_price", "in_stock")) or any(map(sku_matches, product["variants"])))
+        ]
+        rows.sort(key=lambda product: str(product.get("created_at")), reverse=True)
+        limit, offset = int(params.get("limit") or 60), int(params.get("offset") or 0)
+        return [{key: value for key, value in product.items() if key != "options"} for product in rows[offset : offset + limit]]
+
+    def _hold(self, variant: dict[str, Any], location: dict[str, Any], qty: int, reason: str, ref_id: str, request: httpx.Request) -> None:
+        """A reservation's ledger row (RESERVE or RELEASE), which data-pipeline writes per location."""
+        self.movements.append(
+            {
+                "id": str(uuid4()), "variant_id": variant["id"], "sku": variant["sku"],
+                "product_name": self.products[variant["product_id"]]["name"], "location_id": location["id"],
+                "location_name": location["name"], "reason": reason, "delta": qty,
+                "type": "RESERVED" if reason == "RESERVE" else "RELEASED", "ref_id": ref_id,
+                "created_by": request.headers["X-User-Id"], "at": self._now(), "reference": None, "counterparty": None, "note": None,
+            }
+        )
 
     # ------------------------------------------------------------------ transport
     def transport(self) -> httpx.MockTransport:
@@ -154,13 +267,55 @@ class FakeDataPipeline:
     def _route(self, method: str, path: str, body: Any, request: httpx.Request) -> httpx.Response:
         catalog = "/api/v1/catalog"
         if path == f"{catalog}/categories" and method == "GET":
-            return _json(200, [{"key": key, "label": key.title()} for key in sorted(self.categories)])
+            return _json(200, [self._category(key) for key in sorted(self.categories)])
+        if path == f"{catalog}/categories" and method == "POST":
+            self.categories.add(body["key"])
+            self.category_details[body["key"]] = {"label": body["label"], "parent_key": body.get("parent_key")}
+            return _json(201, self._category(body["key"]))
+        if (match := re.fullmatch(rf"{catalog}/categories/([^/]+)", path)) and method == "DELETE":
+            key = match.group(1)
+            if key not in self.categories:
+                return _detail(404, f"Category '{key}' not found")
+            used = sum(1 for product in self.products.values() if product.get("category") == key)
+            if used:
+                return _detail(400, f"Category '{key}' is used by {used} product(s); move them to another category first")
+            if any(details.get("parent_key") == key for details in self.category_details.values()):
+                return _detail(400, f"Category '{key}' is the parent of another category")
+            self.categories.discard(key)
+            self.category_details.pop(key, None)
+            return httpx.Response(204)
+        if path == f"{catalog}/describe" and method == "GET":
+            names = sorted({str(option["name"]) for product in self.products.values() for option in product.get("options") or []})
+            return _json(200, {"categories": [self._category(key) for key in sorted(self.categories)], "option_types": names, "filterable_fields": []})
         if path == f"{catalog}/locations" and method == "GET":
             return _json(200, self.locations)
+        if path == f"{catalog}/locations" and method == "POST":
+            location = {"id": str(uuid4()), **self._location_fields(body)}
+            self.locations.append(location)
+            return _json(201, location)
+        if match := re.fullmatch(rf"{catalog}/locations/([^/]+)", path):
+            location = next((item for item in self.locations if item["id"] == match.group(1)), None)
+            if location is None:
+                return _detail(400, f"Location '{match.group(1)}' not found")
+            if method == "PUT":
+                location.update(self._location_fields(body))  # every field is written, like data-pipeline
+                return _json(200, location)
+            if method == "DELETE":
+                levels = [key for key, level in self.stock.items() if key[1] == location["id"]]
+                if any(self.stock[key]["on_hand"] > 0 or self.stock[key]["reserved"] > 0 for key in levels):
+                    return _detail(400, f"Cannot delete location '{location['name']}' because it contains active inventory")
+                for key in levels:
+                    del self.stock[key]
+                self.movements = [entry for entry in self.movements if entry["location_id"] != location["id"]]
+                self.locations.remove(location)
+                return httpx.Response(204)
+        if path == f"{catalog}/products" and method == "GET":
+            return _json(200, self._list_products(request.url.params))
         if path == f"{catalog}/products" and method == "POST":
             if body["category"] not in self.categories:
                 return _detail(400, f"Category '{body['category']}' does not exist in tenant vocabulary")
-            product = {**body, "id": str(uuid4()), "variants": []}
+            product = {**body, "id": str(uuid4()), "variants": [], "options": [], "created_at": self._now()}
+            product["options"] = _set_options(product, body.get("options") or [])
             self.products[product["id"]] = product
             return _json(201, product)
         if match := re.fullmatch(rf"{catalog}/products/([^/]+)", path):
@@ -175,13 +330,26 @@ class FakeDataPipeline:
                 for variant in product["variants"]:
                     variant["status"] = "RETIRED"
                 return _json(200, product)
+        if (match := re.fullmatch(rf"{catalog}/products/([^/]+)/options", path)) and method == "PUT":
+            product = self.products[match.group(1)]
+            names = [option["name"] for option in body["options"]]
+            if len(set(names)) != len(names):
+                return _detail(400, "Each option name may appear only once")
+            product["options"] = _set_options(product, body["options"])
+            return _json(200, product["options"])
         if (match := re.fullmatch(rf"{catalog}/products/([^/]+)/variants", path)) and method == "POST":
             product = self.products[match.group(1)]
+            known = {value["id"]: value for option in product.get("options") or [] for value in option["values"]}
             for incoming in body["variants"]:
                 existing = self.variant_by_sku(incoming["sku"])
                 if existing is not None and existing["product_id"] != product["id"]:
                     return _detail(400, f"SKU '{incoming['sku']}' already exists for a different product in this tenant")
-                values = [{"id": value_id, "value": "?"} for value_id in incoming.get("option_value_ids") or []]
+                kept = {value["id"]: value for value in (existing or {}).get("option_values") or []}
+                values = []
+                for value_id in incoming.get("option_value_ids") or []:
+                    if value_id not in known and value_id not in kept:
+                        return _detail(400, "One or more option_value_ids do not belong to this product or tenant")
+                    values.append(dict(known.get(value_id) or kept[value_id]))
                 fields = {key: incoming.get(key) for key in ("barcode", "price", "currency", "weight", "status")}
                 if existing is None:
                     product["variants"].append(
@@ -197,40 +365,32 @@ class FakeDataPipeline:
             variant = self.variant_by_sku(match.group(1))
             if variant is None:
                 return _detail(404, "Variant not found")
-            levels = [
-                {
-                    "location_id": location["id"],
-                    "location_name": location["name"],
-                    "sellable": location["sellable"],
-                    "qty_on_hand": level["on_hand"],
-                    "qty_reserved": level["reserved"],
-                    "qty_available": max(0, level["on_hand"] - level["reserved"]),
-                }
-                for location in self.locations
-                if (level := self.stock.get((variant["id"], location["id"])))
-            ]
-            return _json(
-                200,
-                {"variant_id": variant["id"], "sku": variant["sku"], "total_available": sum(l["qty_available"] for l in levels), "by_location": levels},
-            )
+            return _json(200, self._availability(variant))
+        if path == f"{catalog}/inventory/availability" and method == "GET":
+            wanted = request.url.params.get_list("skus")
+            found = [variant for sku in wanted if (variant := self.variant_by_sku(sku))]
+            return _json(200, {variant["sku"]: self._availability(variant) for variant in found})
         if path == f"{catalog}/inventory/movements" and method == "POST":
             return self._record_movement(body)
         if path == f"{catalog}/inventory/movements" and method == "GET":
             params = request.url.params
             reasons = params.get_list("reason")
+            holds = params.get("include_holds") == "true"
             items = [
                 entry
                 for entry in reversed(self.movements)
                 if (not params.get("variant_id") or entry["variant_id"] == params["variant_id"])
                 and (not params.get("location_id") or entry["location_id"] == params["location_id"])
-                and (not reasons or entry["reason"] in reasons)
+                and (not params.get("ref_id") or entry.get("ref_id") == params["ref_id"])
+                and (entry["reason"] in reasons if reasons else holds or entry["reason"] not in ("RESERVE", "RELEASE"))
             ]
-            limit = int(params.get("limit") or 50)
-            return _json(200, {"items": items[:limit], "total": len(items), "limit": limit, "offset": 0})
+            limit, offset = int(params.get("limit") or 50), int(params.get("offset") or 0)
+            return _json(200, {"items": items[offset : offset + limit], "total": len(items), "limit": limit, "offset": offset})
         if path == f"{catalog}/inventory/movements/summary" and method == "GET":
+            wanted = request.url.params.get("location_id")
             places = [
                 {
-                    "location_id": location["id"], "location_name": location["name"], "location_type": "WAREHOUSE",
+                    "location_id": location["id"], "location_name": location["name"], "location_type": location.get("type", "WAREHOUSE"),
                     "sellable": location["sellable"],
                     "qty_on_hand": sum(level["on_hand"] for (_, place), level in self.stock.items() if place == location["id"]),
                     "qty_reserved": sum(level["reserved"] for (_, place), level in self.stock.items() if place == location["id"]),
@@ -238,6 +398,7 @@ class FakeDataPipeline:
                     "sold": -sum(e["delta"] for e in self.movements if e["reason"] == "SALE" and e["location_id"] == location["id"]),
                 }
                 for location in self.locations
+                if not wanted or location["id"] == wanted
             ]
             return _json(200, {"locations": places, "totals": {"movements": len(self.movements)}})
         if path == f"{catalog}/inventory/reserve" and method == "POST":
@@ -258,9 +419,10 @@ class FakeDataPipeline:
             if wanted > 0:
                 return _detail(400, f"Insufficient stock: requested {body['qty']}")
             reservation_id = str(uuid4())
-            for level, _, take in allocations:
+            for level, location, take in allocations:
                 level["reserved"] += take
-            self.reservations[reservation_id] = {"allocations": allocations, "released": False, "sku": body["sku"]}
+                self._hold(variant, location, take, "RESERVE", reservation_id, request)
+            self.reservations[reservation_id] = {"allocations": allocations, "released": False, "sku": body["sku"], "variant": variant}
             return _json(
                 200,
                 {
@@ -277,8 +439,9 @@ class FakeDataPipeline:
                 return _detail(400, f"No active reservation found with ID '{match.group(1)}'")
             if reservation["released"]:
                 return _detail(400, f"Reservation '{match.group(1)}' has already been released")
-            for level, _, take in reservation["allocations"]:
+            for level, location, take in reservation["allocations"]:
                 level["reserved"] -= take
+                self._hold(reservation["variant"], location, take, "RELEASE", match.group(1), request)
             reservation["released"] = True
             released = sum(take for _, _, take in reservation["allocations"])
             return _json(200, {"reservation_id": match.group(1), "released_qty": released, "movements_count": 1})
@@ -366,6 +529,30 @@ def _location_named(pipeline: FakeDataPipeline, location_id: str) -> dict[str, A
     return next(location for location in pipeline.locations if location["id"] == location_id)
 
 
+def _set_options(product: dict[str, Any], options: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """PUT /products/{id}/options: axes and values matched by name keep their ids; SKUs lose only removed values."""
+    current = {option["name"]: option for option in product.get("options") or []}
+    result = []
+    for index, incoming in enumerate(options):
+        option = current.get(incoming["name"]) or {"id": str(uuid4()), "name": incoming["name"], "values": []}
+        existing = {value["value"]: value for value in option["values"]}
+        result.append(
+            {
+                **option,
+                "position": incoming.get("position") or index,
+                "values": [
+                    {**(existing.get(value["value"]) or {"id": str(uuid4()), "option_id": option["id"], "value": value["value"]}),
+                     "position": value.get("position") or order}
+                    for order, value in enumerate(incoming.get("values") or [])
+                ],
+            }
+        )
+    kept = {value["id"] for option in result for value in option["values"]}
+    for variant in product.get("variants") or []:
+        variant["option_values"] = [v for v in variant.get("option_values") or [] if v["id"] in kept or not v.get("option_id")]
+    return result
+
+
 def _write(pipeline: FakeDataPipeline, variant: dict[str, Any], location_id: str, delta: int, reason: str, body: dict[str, Any]) -> dict[str, Any]:
     level = pipeline.stock.setdefault((variant["id"], location_id), {"on_hand": 0, "reserved": 0})
     level["on_hand"] += delta
@@ -375,7 +562,7 @@ def _write(pipeline: FakeDataPipeline, variant: dict[str, Any], location_id: str
         "type": {"RESTOCK": "RECEIVED", "SALE": "SOLD", "TRANSFER_OUT": "SHIPPED_OUT", "TRANSFER_IN": "SHIPPED_IN",
                  "DAMAGE": "DAMAGED", "LOST": "LOST", "RETURN": "RETURNED"}.get(reason, "CORRECTION"),
         "on_hand_after": level["on_hand"], "reference": body.get("reference"), "counterparty": body.get("counterparty"),
-        "note": body.get("note"),
+        "note": body.get("note"), "at": pipeline._now(), "product_name": pipeline.products[variant["product_id"]]["name"],
     }
     pipeline.movements.append(entry)
     return entry

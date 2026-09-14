@@ -59,10 +59,20 @@ const TOOL_LABEL: Record<string, string> = {
   create_catalog_item: 'Add catalog item',
   update_catalog_item: 'Update catalog item',
   retire_catalog_item: 'Retire catalog item',
-  set_stock: 'Set stock',
+  restore_catalog_item: 'Restore catalog item',
+  add_catalog_skus: 'Add SKUs',
+  list_catalog_items: 'List catalog',
+  get_catalog_item: 'Look at catalog item',
+  describe_catalog: 'Catalog setup',
+  save_catalog_category: 'Save category',
+  delete_catalog_category: 'Remove category',
+  create_stock_location: 'Add stock location',
+  update_stock_location: 'Change stock location',
+  delete_stock_location: 'Remove stock location',
   record_stock_movement: 'Record stock movement',
   correct_stock_count: 'Correct stock count',
   stock_history: 'Stock history',
+  list_stock_reservations: 'Stock reservations',
   reserve_stock: 'Reserve stock',
   release_stock: 'Release reservation',
   undo_actions: 'Undo actions',
@@ -86,7 +96,13 @@ const WRITE_TOOLS = new Set([
   'create_catalog_item',
   'update_catalog_item',
   'retire_catalog_item',
-  'set_stock',
+  'restore_catalog_item',
+  'add_catalog_skus',
+  'save_catalog_category',
+  'delete_catalog_category',
+  'create_stock_location',
+  'update_stock_location',
+  'delete_stock_location',
   'record_stock_movement',
   'correct_stock_count',
   'reserve_stock',
@@ -118,6 +134,20 @@ const WHERE_TO_CHECK: Record<string, string> = {
   reclassify_knowledge_document: ' (check the document in the knowledge vault)',
   reindex_knowledge_document: ' (check the document in the knowledge vault)',
   delete_knowledge_document: ' (check the knowledge vault)',
+  create_catalog_item: ' (check Product Management)',
+  update_catalog_item: ' (check the item in Product Management)',
+  retire_catalog_item: ' (check the item in Product Management)',
+  restore_catalog_item: ' (check the item in Product Management)',
+  add_catalog_skus: ' (check the item in Product Management)',
+  save_catalog_category: ' (check the categories in Product Management)',
+  delete_catalog_category: ' (check the categories in Product Management)',
+  create_stock_location: ' (check Locations in Product Management)',
+  update_stock_location: ' (check Locations in Product Management)',
+  delete_stock_location: ' (check Locations in Product Management)',
+  record_stock_movement: ' (check the stock history in Product Management)',
+  correct_stock_count: ' (check the stock history in Product Management)',
+  reserve_stock: ' (check the stock reservations)',
+  release_stock: ' (check the stock reservations)',
 };
 
 function describeResult(item: TranscriptItem): string | null | undefined {
@@ -168,7 +198,6 @@ function describeCall(item: TranscriptItem): string {
       return args.customer_company ? String(args.customer_company) : '';
     case 'create_catalog_item':
       return args.name ? String(args.name) : '';
-    case 'set_stock':
     case 'reserve_stock':
       return [args.sku, args.quantity].filter((part) => part !== undefined).map(String).join(' · ');
     case 'record_stock_movement':
@@ -179,7 +208,26 @@ function describeCall(item: TranscriptItem): string {
     case 'correct_stock_count':
       return [args.sku, args.counted_quantity === undefined ? '' : `count ${String(args.counted_quantity)}`].filter(Boolean).map(String).join(' · ');
     case 'stock_history':
+    case 'list_stock_reservations':
       return args.sku ? String(args.sku) : '';
+    case 'list_catalog_items':
+      return [args.status, args.category, typeof args.keywords === 'string' ? `“${args.keywords}”` : '', args.in_stock ? 'in stock' : '']
+        .filter(Boolean)
+        .map((part) => String(part).toLowerCase())
+        .join(' · ');
+    case 'get_catalog_item':
+      return args.sku ? String(args.sku) : '';
+    case 'add_catalog_skus':
+      return Array.isArray(args.skus) ? args.skus.map((sku) => String((sku as { sku?: unknown }).sku ?? '')).join(', ') : '';
+    case 'save_catalog_category':
+      return [args.label, args.key].filter(Boolean).map(String).join(' · ');
+    case 'delete_catalog_category':
+      return args.key ? String(args.key) : '';
+    case 'create_stock_location':
+      return args.name ? String(args.name) : '';
+    case 'update_stock_location':
+    case 'delete_stock_location':
+      return args.location ? String(args.location) : '';
     case 'list_knowledge_documents':
       return [args.status, args.category, typeof args.search === 'string' ? `“${args.search}”` : '']
         .filter(Boolean)
@@ -216,7 +264,10 @@ function describeCall(item: TranscriptItem): string {
       return [about, args.query ? `“${String(args.query)}”` : ''].filter(Boolean).join(' · ');
     }
     case 'update_catalog_item':
+      return Array.isArray(args.sku_changes) ? args.sku_changes.map((change) => String((change as { sku?: unknown }).sku ?? '')).join(', ') : '';
     case 'retire_catalog_item':
+    case 'restore_catalog_item':
+    case 'describe_catalog':
     case 'release_stock':
     case 'forget':
     case 'read_offloaded_result':

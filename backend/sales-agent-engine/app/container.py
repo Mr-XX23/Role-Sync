@@ -45,6 +45,7 @@ from app.platform.workspace_client import DealsClient, RepProfileClient, Workspa
 from app.skills.service import SKILL_TOOL, SkillService
 from app.skills.store import SkillStore
 from app.tools.adapters.catalog import catalog_tools
+from app.tools.adapters.catalog_setup import catalog_setup_tools
 from app.tools.adapters.catalog_writes import catalog_write_tools
 from app.tools.adapters.deals import deal_tools
 from app.tools.adapters.documents import document_tools
@@ -169,6 +170,7 @@ def default_registry(
         *knowledge_write_tools(data_pipeline, workspaces, vault_link=settings.knowledge_vault_link),
         *catalog_tools(data_pipeline),
         *catalog_write_tools(data_pipeline, workspaces),
+        *catalog_setup_tools(data_pipeline, workspaces),
         *deal_tools(deals, workspaces),
     ]
     store = DocumentStore(
