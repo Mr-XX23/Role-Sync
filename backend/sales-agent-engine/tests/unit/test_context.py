@@ -72,8 +72,10 @@ class FakeRouter:
 
 class Profiles:
     async def get(self, user_id: UUID) -> RepProfile | None:
-        return RepProfile(first_name="Rohan", job_title="Account Executive", communication_style="Concise",
-                          persona_context="I sell to fintech CFOs. Keep emails under 120 words.")
+        return RepProfile(first_name="Rohan", last_name="Sharma", job_title="Account Executive", organization="Acme Corp",
+                          location="Kathmandu", skills="Negotiation, SaaS", bio="Ten years selling payment software.",
+                          communication_style="Concise", persona_context="I sell to fintech CFOs. Keep emails under 120 words.",
+                          time_zone="Asia/Kathmandu", language="es")
 
 
 def _manager(memory=None, blobs=None, router=None, *, budget: int = 4_000, **overrides: Any) -> ContextManager:
@@ -219,8 +221,11 @@ async def test_what_is_known_about_the_rep_goes_into_the_system_prompt():
     prepared = await manager.prepare(CTX, history=_turn(1), system="SYSTEM", tools=TOOLS)
 
     assert "About the rep you work for" in prepared.system
-    assert "Rep: Rohan, Account Executive" in prepared.system and "Preferred communication style: Concise" in prepared.system
+    assert "Rep: Rohan Sharma, Account Executive, Acme Corp" in prepared.system and "Preferred communication style: Concise" in prepared.system
     assert "In their own words: I sell to fintech CFOs." in prepared.system
+    assert "- Based in: Kathmandu" in prepared.system and "- Language in their settings: Spanish" in prepared.system
+    assert "- Skills: Negotiation, SaaS" in prepared.system and "- About them: Ten years selling payment software." in prepared.system
+    assert "Asia/Kathmandu" not in prepared.system  # the time zone belongs to the time context, not this block
     assert "Signs emails as 'Best, Rohan' [f_" in prepared.system
 
 

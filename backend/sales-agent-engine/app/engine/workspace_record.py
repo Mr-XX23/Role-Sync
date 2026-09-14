@@ -112,6 +112,14 @@ def describe_action(tool: str, args: Any) -> tuple[str, str]:
         "reclassify_knowledge_document": ("Classify a knowledge-base document again", "KNOWLEDGE_CHANGE"),
         "reindex_knowledge_document": ("Index a knowledge-base document again", "KNOWLEDGE_CHANGE"),
         "delete_knowledge_document": ("Delete a knowledge-base document", "KNOWLEDGE_CHANGE"),
+        "update_my_profile": (
+            "Update the rep's profile: " + ", ".join(str(key).replace("_", " ") for key in fields),
+            "PROFILE_CHANGE",
+        ),
+        "update_my_preferences": (
+            "Change the rep's settings: " + ", ".join(str(key).replace("_", " ") for key in fields),
+            "PROFILE_CHANGE",
+        ),
         "undo_actions": (f"Undo {len(fields.get('action_ids') or [])} completed action(s)", "UNDO"),
     }
     if tool in described:

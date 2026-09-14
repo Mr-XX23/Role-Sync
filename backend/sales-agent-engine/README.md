@@ -18,7 +18,7 @@ approval before any real-world action.
 | 4 | Context manager (prompt budget, summaries, offloaded results), versioned memory with optimistic locking (rep, customer, deal, conversation), deals in workspace-service, "what the agent remembers" review | done |
 | 5 | Sub-agents: research, outreach and quote, handed work with `delegate`, each scoped at the gate, result-only back to the planner | done |
 | — | Skills: playbooks the agent follows (10 built in, workspace and private skills, per-rep switches, versions, SKILL.md import/export, AI drafts, usage), loaded with `use_skill`, picked in chat or handed to sub-agents | done |
-| — | The app's features as tools: knowledge vault (add pages, classify, re-index, delete) and catalog + inventory (listing, SKUs and options, categories, stock locations, reservations, restoring retired items) | done; profile and connectors next |
+| — | The app's features as tools: knowledge vault (add pages, classify, re-index, delete), catalog + inventory (listing, SKUs and options, categories, stock locations, reservations, restoring retired items), and the rep's profile and settings | done; connectors next |
 | 6 | Autonomy layer | next |
 
 ## Layout
@@ -96,6 +96,8 @@ outcome is unknown (timeout, dropped connection) is reported as UNKNOWN and neve
 | `delete_knowledge_document` | write (coordinator only): only the rep's own documents unless they are an owner or admin, checked before approval; undo adds a web page back from its address, a file can't be restored | data-pipeline knowledge vault |
 | `create_deal` | write (approval); warns about an open deal for the same customer; undo deletes it unless it changed | workspace-service deals |
 | `update_deal` | write (approval): only the fields it names; re-applies over a concurrent edit; undo restores only fields nobody touched since | workspace-service deals |
+| `update_my_profile` | write (coordinator only): only the fields it names, in one save; refused before approval when the rep has no profile save left (24 every 24 hours); undo puts back the fields nobody changed since, and uses a save too | workspace-service profile |
+| `update_my_preferences` | write (coordinator only): time zone, language, theme; no limit; undo puts back the previous values | workspace-service preferences |
 | `remember`, `forget` | memory: saved and deleted without approval, audited; shared memory is closed to viewers | engine `agent.memory` |
 | `undo_actions` | write: undo completed actions of the session, newest first (orchestrator only) | each tool's own undo handler |
 | `search_emails`, `read_email_thread` | read | Composio Gmail |
@@ -112,6 +114,7 @@ outcome is unknown (timeout, dropped connection) is reported as UNKNOWN and neve
 | `research_prospect` | read | web search, condensed into a cited brief by the low-complexity route (OpenRouter) |
 | `delegate` | hands a piece of work to a sub-agent (the coordinator only); no approval, audited | the engine's own sub-agents |
 | `search_deals` | read | workspace-service deals |
+| `get_my_profile` | read: the rep's whole profile (contact details and links too), settings, and the profile saves and photo changes they have left | workspace-service profile |
 | `recall` | read | engine `agent.memory` |
 | `read_offloaded_result` | read: any part of a result too large to keep in the prompt, or passages matching a phrase | engine `agent.context_blob` |
 
@@ -119,7 +122,8 @@ Connector tools are denied (not failed) when the user hasn't connected that app.
 `sources` (web pages, message and page links, or links to what a write created), which the chat UI
 shows under each step. Catalog, stock and knowledge-base writes are denied to workspace viewers;
 knowledge-base writes need the KNOWLEDGE scope and catalog setup (categories, locations, SKUs of existing
-items, restoring items) the CATALOG_SETUP scope, which no sub-agent has. Every executed write's result
+items, restoring items) the CATALOG_SETUP scope, and changes to the rep's profile and settings the PROFILE scope, which
+no sub-agent has. Every executed write's result
 includes an `action_id`, which `undo_actions` takes.
 
 ## Guardrails

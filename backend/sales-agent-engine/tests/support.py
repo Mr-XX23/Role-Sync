@@ -88,9 +88,10 @@ def make_token(
 
 @dataclass
 class FakeWorkspaceService:
-    """Answers like workspace-service: ``GET /api/v1/workspaces`` (membership), the rep's profile,
-    the context / task / note upserts the engine uses to record agent work, and deals (versioned,
-    409 on a stale ``expected_version``, only the owner or an OWNER/ADMIN deletes)."""
+    """Answers like workspace-service: ``GET /api/v1/workspaces`` (membership), the rep's profile
+    (24 saves, then 429), settings and change allowances, the context / task / note upserts the engine
+    uses to record agent work, and deals (versioned, 409 on a stale ``expected_version``, only the
+    owner or an OWNER/ADMIN deletes)."""
 
     memberships: dict[UUID, set[UUID]] = field(default_factory=dict)
     roles: dict[tuple[UUID, UUID], str] = field(default_factory=dict)  # (user, workspace) → role; default MEMBER
@@ -101,6 +102,9 @@ class FakeWorkspaceService:
     puts: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     fail_next_puts: list[int] = field(default_factory=list)  # status codes to answer the next PUTs with
     profiles: dict[UUID, dict[str, Any]] = field(default_factory=dict)
+    preferences: dict[UUID, dict[str, Any]] = field(default_factory=dict)  # created with the defaults when first read
+    profile_saves: dict[UUID, int] = field(default_factory=dict)  # saves used in the current 24-hour window
+    profile_requests: list[tuple[str, str, Any]] = field(default_factory=list)  # (method, route under /profile, body)
     deals: dict[str, dict[str, Any]] = field(default_factory=dict)
     deal_requests: list[tuple[str, str, Any]] = field(default_factory=list)
     # Runs before each deal PUT is applied (e.g. to simulate someone else's concurrent edit).
@@ -117,9 +121,8 @@ class FakeWorkspaceService:
             self.calls += 1
             if "/deals" in request.url.path:
                 return self._deals(request)
-            if request.url.path == "/api/v1/workspaces/profile":
-                profile = self.profiles.get(UUID(request.headers["X-User-Id"]))
-                return httpx.Response(200, json=profile) if profile is not None else httpx.Response(404)
+            if request.url.path.startswith("/api/v1/workspaces/profile"):
+                return self._profile(request)
             if request.method == "PUT":
                 return self._upsert(request)
             if request.url.path != "/api/v1/workspaces":
@@ -134,6 +137,40 @@ class FakeWorkspaceService:
             return httpx.Response(200, json=body)
 
         return httpx.MockTransport(handler)
+
+    def _profile(self, request: httpx.Request) -> httpx.Response:
+        user_id = UUID(request.headers["X-User-Id"])
+        route = request.url.path.removeprefix("/api/v1/workspaces/profile") or "/"
+        body = json.loads(request.content) if request.content else None
+        self.profile_requests.append((request.method, route, body))
+        used = self.profile_saves.get(user_id, 0)
+        if route == "/limits":
+            return httpx.Response(200, json={
+                "profile_saves": {"limit": 24, "used": used, "remaining": max(0, 24 - used), "window_hours": 24,
+                                  "resets_at": "2026-09-15T10:00:00Z" if used else None},
+                "photo_changes": {"limit": 3, "used": 0, "remaining": 3, "window_hours": 24, "resets_at": None},
+            })
+        if route == "/preferences":
+            settings = self.preferences.setdefault(
+                user_id, {"theme": "dark", "language": "en", "timezone": "UTC", "notificationEmail": True, "notificationSms": True}
+            )
+            if request.method == "PUT":
+                settings.update({key: value for key, value in (body or {}).items() if value is not None})
+            return httpx.Response(200, json=settings)
+        profile = self.profiles.get(user_id)
+        if route != "/" or profile is None:
+            return httpx.Response(404)
+        if request.method == "GET":
+            return httpx.Response(200, json=profile)
+        if used >= 24:
+            return httpx.Response(429, json={
+                "message": "Profile update limit reached. You can update your profile 24 times every 24 hours. Please try again in 5 hour(s)."
+            })
+        self.profile_saves[user_id] = used + 1
+        for key, value in (body or {}).items():  # first_name → firstName, x_url → xUrl
+            first, *rest = key.split("_")
+            profile[first + "".join(part.title() for part in rest)] = value
+        return httpx.Response(201, json={"profile_id": str(user_id), "message": "Workspace profile processed successfully"})
 
     def _deals(self, request: httpx.Request) -> httpx.Response:
         parts = request.url.path.strip("/").split("/")  # api v1 workspaces {ws} deals [{id}]
