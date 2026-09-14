@@ -20,8 +20,10 @@ from typing import Any, Literal
 from pydantic import Field
 
 from app.models.types import Message, Role
+from app.skills.model import SLUG_PATTERN
+from app.skills.service import SkillService, SkillUnavailable
 from app.tools.registry import ToolDefinition
-from app.tools.types import ToolCategory, ToolInput, ToolInvocation, ToolKind, ToolOutput, ToolScope
+from app.tools.types import ToolCategory, ToolInput, ToolInputError, ToolInvocation, ToolKind, ToolOutput, ToolScope
 
 DELEGATE_TOOL = "delegate"
 
@@ -117,19 +119,30 @@ class DelegateArgs(ToolInput):
         max_length=6000,
         description="Facts already gathered that it needs (for example a research brief to write the email from)",
     )
+    skill: str | None = Field(
+        default=None,
+        pattern=SLUG_PATTERN,
+        description="Optional: the id of a skill from your skills list for the sub-agent to follow (it loads it first)",
+    )
 
 
-def delegate_tool() -> ToolDefinition:
+def delegate_tool(skills: SkillService | None = None) -> ToolDefinition:
     """The coordinator's only way to start a sub-agent. Scoped so a sub-agent can't delegate."""
 
     async def handler(invocation: ToolInvocation) -> ToolOutput:
         args = invocation.args
         assert isinstance(args, DelegateArgs)
         agent = SUBAGENTS[args.agent]
-        return ToolOutput(
-            data={"agent": agent.name, "task": args.task},
-            summary=f"handed to the {agent.title}",
-        )
+        summary = f"handed to the {agent.title}"
+        if args.skill:
+            if skills is None:
+                raise ToolInputError("skills aren't available to sub-agents here; leave skill out")
+            try:
+                skill = await skills.usable(invocation.ctx.tenant_id, invocation.ctx.user_id, args.skill)
+            except SkillUnavailable as exc:
+                raise ToolInputError(str(exc)) from exc
+            summary += f" with the skill '{skill.name}'"
+        return ToolOutput(data={"agent": agent.name, "task": args.task, "skill": args.skill}, summary=summary)
 
     roster = "\n".join(f"- {agent.name}: {agent.purpose}" for agent in SUBAGENTS.values())
     return ToolDefinition(
@@ -138,8 +151,8 @@ def delegate_tool() -> ToolDefinition:
             "Hand a piece of work to a sub-agent and get its result back. Use it when part of the request needs "
             "several steps in one area, rather than doing those steps yourself:\n"
             f"{roster}\n"
-            "The sub-agent cannot see this conversation, so put everything it needs in task and context. "
-            "You get only its result, not its steps."
+            "The sub-agent cannot see this conversation, so put everything it needs in task and context, and pass "
+            "skill when a skill from your list fits its part of the work. You get only its result, not its steps."
         ),
         kind=ToolKind.DELEGATE,
         scope=ToolScope.DELEGATE,
@@ -169,6 +182,8 @@ def start(call: dict[str, Any], args: Mapping[str, Any]) -> dict[str, Any]:
         "steps": 0,
         "log": [],  # {"tool", "outcome", "summary"} per call, for the rep and the planner
         "sources": [],
+        "skill": args.get("skill") or None,  # loaded with use_skill before the sub-agent's first step
+        "skill_loaded": False,
     }
 
 

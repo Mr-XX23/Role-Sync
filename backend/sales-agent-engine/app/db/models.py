@@ -23,6 +23,11 @@ Deliberate additions to the plan's column lists (each needed for correctness):
 - ``memory.written_by``: whose run (or app action) wrote a version, for the review panel.
 - ``context_blob``: tool results too large to keep in the conversation, stored once and
   referenced from it (the plan's "offload large tool results to storage").
+- ``skill`` + ``skill_version`` + ``skill_setting`` + ``skill_usage``: playbooks the agent follows
+  (decided 2026-09-14). Built-in skills live in code; these tables hold the workspace's and reps' own
+  skills, admin customizations of built-ins, every saved version, the on/off switches (per rep, and
+  per workspace for admins) and how often each skill was used. Settings and usage name a skill by its
+  ``ref``: a built-in's key (so a customized built-in keeps its switches and stats), else the skill id.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -49,7 +55,16 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.context import RunMode
-from app.core.enums import MemoryScope, PendingActionStatus, SagaStatus, SessionStatus, ToolOutcome
+from app.core.enums import (
+    MemoryScope,
+    PendingActionStatus,
+    SagaStatus,
+    SessionStatus,
+    SkillCategory,
+    SkillUse,
+    SkillVisibility,
+    ToolOutcome,
+)
 from app.db.base import Base, TimestampMixin, check_in
 
 
@@ -245,3 +260,96 @@ class ContextBlob(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     chars: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class SkillRow(TimestampMixin, Base):
+    """A workspace's or a rep's own skill, or a workspace's customization of a built-in (``builtin_key``).
+    Its current content; every saved version is also in ``skill_version``. Archived, never deleted."""
+
+    __tablename__ = "skill"
+    __table_args__ = (
+        CheckConstraint(check_in("visibility", SkillVisibility), name="visibility"),
+        CheckConstraint(check_in("category", SkillCategory), name="category"),
+        CheckConstraint("visibility <> 'PRIVATE' OR owner_id IS NOT NULL", name="private_owner"),
+        CheckConstraint("builtin_key IS NULL OR visibility = 'WORKSPACE'", name="builtin_shared"),
+        # The name the agent uses for a skill is unique among a workspace's active skills.
+        Index("uq_skill_active_slug", "tenant_id", "slug", unique=True, postgresql_where=text("archived_at IS NULL")),
+        Index("ix_skill_tenant_visibility", "tenant_id", "visibility"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    slug: Mapped[str] = mapped_column(Text, nullable=False)
+    visibility: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_id: Mapped[uuid.UUID | None] = mapped_column()
+    builtin_key: Mapped[str | None] = mapped_column(Text)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    instructions: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(Text, nullable=False)
+    tools: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    created_by: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    updated_by: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_by: Mapped[uuid.UUID | None] = mapped_column()
+
+
+class SkillVersionRow(Base):
+    """One saved version of a skill, for its history and restore."""
+
+    __tablename__ = "skill_version"
+    __table_args__ = (
+        CheckConstraint(check_in("category", SkillCategory), name="category"),
+        UniqueConstraint("skill_id", "version", name="uq_skill_version_skill_version"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    skill_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("agent.skill.id", ondelete="CASCADE"), nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    instructions: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(Text, nullable=False)
+    tools: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    note: Mapped[str | None] = mapped_column(Text)  # "Restored from version 2", "Imported from SKILL.md", ...
+    edited_by: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    edited_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class SkillSettingRow(Base):
+    """An on/off switch for a skill: a rep's own (``user_id``), or a workspace admin's for everyone (no user)."""
+
+    __tablename__ = "skill_setting"
+    __table_args__ = (
+        Index("uq_skill_setting_workspace", "tenant_id", "skill_ref", unique=True, postgresql_where=text("user_id IS NULL")),
+        Index("uq_skill_setting_user", "tenant_id", "skill_ref", "user_id", unique=True, postgresql_where=text("user_id IS NOT NULL")),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    skill_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    user_id: Mapped[uuid.UUID | None] = mapped_column()
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    updated_by: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class SkillUsageRow(Base):
+    """One use of a skill by an agent."""
+
+    __tablename__ = "skill_usage"
+    __table_args__ = (
+        CheckConstraint(check_in("how", SkillUse), name="how"),
+        Index("ix_skill_usage_tenant_ref_used", "tenant_id", "skill_ref", "used_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    skill_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    skill_version: Mapped[int | None] = mapped_column(Integer)
+    user_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    session_id: Mapped[uuid.UUID | None] = mapped_column()
+    how: Mapped[str] = mapped_column(Text, nullable=False)
+    used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
