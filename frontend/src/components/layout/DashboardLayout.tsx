@@ -141,7 +141,7 @@ export const DashboardLayout: React.FC = () => {
         logo={config.logo}
         items={config.items}
         bottomItems={config.bottomItems}
-        actionButton={config.actionButton}
+        // actionButton={config.actionButton} // hidden for now (New Agent button)
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
