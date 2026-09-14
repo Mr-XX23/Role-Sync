@@ -11,6 +11,7 @@ import {
   Package,
   MessagesSquare,
   Handshake,
+  UserCog,
 } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import type { SidebarItem } from './Sidebar';
@@ -23,6 +24,9 @@ import { WorkspaceGate } from '../guards/WorkspaceGate';
 export const DashboardLayout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { activeRolePack } = useAppSelector((state) => state.role);
+  const workspaceId = useAppSelector((state) => state.workspace.currentWorkspace?.workspaceId);
+  const workspaceRole = useAppSelector((state) => state.workspace.currentWorkspace?.role);
+  const canManageUsers = workspaceRole === 'OWNER' || workspaceRole === 'ADMIN';
   const dispatch = useAppDispatch();
 
   // Define sidebar configurations based on the selected persona role
@@ -78,6 +82,17 @@ export const DashboardLayout: React.FC = () => {
               icon: FolderKanban,
               path: '/salesman/workspace',
             },
+            // Only workspace owners and admins manage people.
+            ...(canManageUsers
+              ? [
+                  {
+                    id: 'user-management',
+                    label: 'User Management',
+                    icon: UserCog,
+                    path: '/salesman/users',
+                  },
+                ]
+              : []),
           ] as SidebarItem[],
           bottomItems: [
             {
@@ -130,7 +145,8 @@ export const DashboardLayout: React.FC = () => {
         <main className="flex-1 overflow-y-auto relative p-4 md:p-8 bg-background/50">
           <div className="max-w-[87rem] mx-auto w-full h-full">
             <WorkspaceGate>
-              <Outlet />
+              {/* Switching workspace remounts the page, so nothing from the previous one lingers. */}
+              <Outlet key={workspaceId} />
             </WorkspaceGate>
           </div>
         </main>

@@ -98,7 +98,8 @@ function readRememberedWorkspace(): string | null {
   }
 }
 
-function rememberWorkspace(workspaceId: string): void {
+/** Keeps a workspace active across reloads (the user switched to it, or it was picked for them). */
+export function rememberWorkspace(workspaceId: string): void {
   try {
     localStorage.setItem(ACTIVE_WORKSPACE_KEY, workspaceId);
   } catch {
@@ -418,7 +419,16 @@ const workspaceSlice = createSlice({
       // fetchWorkspaces
       .addCase(fetchWorkspaces.fulfilled, (state, action: PayloadAction<WorkspaceItem[]>) => {
         state.workspaces = action.payload;
-        if (action.payload.length > 0 && !state.currentWorkspace) {
+        const currentId = state.currentWorkspace?.workspaceId;
+        const fresh = currentId ? action.payload.find((ws) => ws.workspaceId === currentId) : undefined;
+        if (fresh) {
+          // Keep the role current: an admin may have changed it.
+          state.currentWorkspace = fresh;
+        } else if (currentId && state.workspaceStatus === 'ready') {
+          // No longer a member of the active workspace: pick again.
+          state.currentWorkspace = null;
+          state.workspaceStatus = 'idle';
+        } else if (action.payload.length > 0 && !state.currentWorkspace) {
           state.currentWorkspace = action.payload[0];
         }
       })

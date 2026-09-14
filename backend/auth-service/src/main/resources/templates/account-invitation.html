@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your sign-in details</title>
+</head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+<div style="background-color: #f4f4f4; padding: 20px; border-radius: 5px;">
+    <h2 style="color: #2c3e50;" th:if="${!reissued}">
+        You've been added to <span th:text="${workspaceName}">your team's workspace</span>
+    </h2>
+    <h2 style="color: #2c3e50;" th:if="${reissued}">Your new sign-in details</h2>
+
+    <p>Hi <strong th:text="${recipientName}">there</strong>,</p>
+    <p th:if="${!reissued}">
+        <strong th:text="${invitedByName}">Your workspace admin</strong> created a
+        <span th:text="${appName}">RoleSync</span> account for you in
+        <strong th:text="${workspaceName}">your team's workspace</strong>. Your account is already verified,
+        so you can sign in straight away.
+    </p>
+    <p th:if="${reissued}">
+        <strong th:text="${invitedByName}">Your workspace admin</strong> sent you a new temporary password for
+        <span th:text="${appName}">RoleSync</span>. Any password sent to you before no longer works.
+    </p>
+
+    <div style="background-color: #ffffff; border: 1px solid #ddd; border-radius: 5px; padding: 15px 20px; margin: 20px 0;">
+        <p style="margin: 0 0 8px 0; font-size: 13px; color: #7f8c8d;">Sign-in email</p>
+        <p style="margin: 0 0 16px 0; font-family: monospace; font-size: 15px;" th:text="${loginEmail}">name@company.com</p>
+        <p style="margin: 0 0 8px 0; font-size: 13px; color: #7f8c8d;">Temporary password</p>
+        <p style="margin: 0; font-family: monospace; font-size: 17px; letter-spacing: 1px;" th:text="${temporaryPassword}">password</p>
+    </div>
+
+    <p>
+        When you sign in, you'll be asked to choose your own password.
+        <span th:if="${expiresOn != null}">This temporary password stops working on
+            <strong th:text="${expiresOn}">date</strong>.</span>
+    </p>
+
+    <div style="text-align: center; margin: 30px 0;">
+        <a th:href="${signInLink}"
+           style="background-color: #3498db; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
+            Sign in
+        </a>
+    </div>
+
+    <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
+    <p style="color: #7f8c8d; font-size: 12px;">
+        If the button doesn't work, copy and paste this link into your browser:<br>
+        <a th:href="${signInLink}" th:text="${signInLink}"></a>
+    </p>
+    <p style="color: #7f8c8d; font-size: 12px;">
+        Keep this email private and delete it once you've chosen your password. If you weren't expecting it,
+        you can ignore it or contact the person who invited you.
+    </p>
+</div>
+</body>
+</html>

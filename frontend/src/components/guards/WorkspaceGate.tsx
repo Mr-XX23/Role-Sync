@@ -1,8 +1,9 @@
 import React, { useEffect } from 'react';
-import { Loader2, RefreshCw } from 'lucide-react';
+import { Loader2, LogOut, RefreshCw } from 'lucide-react';
 import { Button } from '../common/Button';
 import { useAppDispatch, useAppSelector } from '../../store';
-import { ensureWorkspace } from '../../store/workspaceSlice';
+import { logoutUser } from '../../store/authSlice';
+import { clearWorkspaceState, ensureWorkspace } from '../../store/workspaceSlice';
 
 /**
  * Renders workspace-scoped pages (catalog, knowledge vault, sales agent...) only once the
@@ -30,14 +31,27 @@ export const WorkspaceGate: React.FC<{ children: React.ReactNode }> = ({ childre
       <div className="h-full flex flex-col items-center justify-center gap-3 text-center py-16">
         <p className="text-sm font-semibold text-foreground">We couldn't load your workspace.</p>
         <p className="text-xs text-muted-foreground max-w-sm">{workspaceError}</p>
-        <Button
-          variant="outline"
-          className="px-4 py-2 text-xs w-auto"
-          onClick={() => userId && void dispatch(ensureWorkspace(userId))}
-          icon={<RefreshCw className="w-3.5 h-3.5" />}
-        >
-          Try again
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            className="px-4 py-2 text-xs w-auto"
+            onClick={() => userId && void dispatch(ensureWorkspace(userId))}
+            icon={<RefreshCw className="w-3.5 h-3.5" />}
+          >
+            Try again
+          </Button>
+          <Button
+            variant="outline"
+            className="px-4 py-2 text-xs w-auto"
+            onClick={() => {
+              void dispatch(logoutUser());
+              dispatch(clearWorkspaceState()); // the next person to sign in here starts fresh
+            }}
+            icon={<LogOut className="w-3.5 h-3.5" />}
+          >
+            Sign out
+          </Button>
+        </div>
       </div>
     );
   }

@@ -9,6 +9,8 @@ interface User {
   email: string;
   role?: string;
   status?: string;
+  // Signed in with a temporary password a workspace admin emailed: choose a new one first.
+  mustChangePassword?: boolean;
 }
 
 // Define the auth state schema
@@ -102,6 +104,7 @@ export const loginUser = createAsyncThunk(
         email: data.email,
         role: data.role,
         status: data.status,
+        mustChangePassword: Boolean(data.mustChangePassword),
       };
     } catch (err: any) {
       return rejectWithValue(err.response?.data?.message || err.message || 'An error occurred during authentication.');
@@ -124,6 +127,7 @@ export const checkSession = createAsyncThunk(
         email: data.user.email,
         role: data.user.role,
         status: data.user.status,
+        mustChangePassword: Boolean(data.user.mustChangePassword),
       };
     } catch (err: any) {
       console.warn('[authSlice] checkSession error:', err.message, 'status:', err.response?.status, 'code:', err.code);
@@ -150,6 +154,7 @@ export const checkSession = createAsyncThunk(
             email: retryData.user.email,
             role: retryData.user.role,
             status: retryData.user.status,
+            mustChangePassword: Boolean(retryData.user.mustChangePassword),
           };
         } catch (refreshErr: any) {
           console.warn('[authSlice] checkSession: refresh failed:', refreshErr.message);
@@ -274,21 +279,25 @@ export const resetPassword = createAsyncThunk(
   }
 );
 
-// Async thunk simulating password update request
+// Async thunk changing the signed-in user's password (including an emailed temporary one)
 export const updatePassword = createAsyncThunk(
   'auth/updatePassword',
-  async (password: string, { rejectWithValue }) => {
+  async (data: { currentPassword: string; newPassword: string }, { rejectWithValue }) => {
     try {
-      // Simulate API call delay of 1.5s
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      
-      if (!password || password.length < 12) {
-        return rejectWithValue('Password does not meet requirements.');
-      }
-      
+      await api.post('/auth/change-password', {
+        currentPassword: data.currentPassword,
+        newPassword: data.newPassword,
+      });
       return { success: true };
-    } catch (err: any) {
-      return rejectWithValue(err.message || 'An error occurred while updating the password.');
+    } catch (err) {
+      const response = (err as { response?: { status?: number; data?: { message?: string } } }).response;
+      if (!response) {
+        return rejectWithValue('The server could not be reached. Check your connection and try again.');
+      }
+      if (response.status === 429) {
+        return rejectWithValue(response.data?.message || 'Too many attempts. Please wait a few minutes and try again.');
+      }
+      return rejectWithValue(response.data?.message || 'Your password could not be changed. Try again.');
     }
   }
 );
@@ -527,10 +536,13 @@ const authSlice = createSlice({
         state.isUpdateLoading = false;
         state.updateSuccess = true;
         state.updateError = null;
+        if (state.user) {
+          state.user.mustChangePassword = false;
+        }
       })
       .addCase(updatePassword.rejected, (state, action) => {
         state.isUpdateLoading = false;
-        state.verifySuccess = false;
+        state.updateSuccess = false;
         state.updateError = (action.payload as string) || 'Failed to update password.';
       });
   },
