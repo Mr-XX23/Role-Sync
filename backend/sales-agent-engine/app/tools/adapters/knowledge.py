@@ -1,4 +1,5 @@
-"""Knowledge-base tools over data-pipeline's knowledge vault (shared by the workspace).
+"""Knowledge-base tools over data-pipeline's knowledge vault (shared by the workspace, except what a rep
+syncs from their own apps, which data-pipeline shows to that rep only).
 
 Search uses data-pipeline's semantic search (``POST /knowledge-vault/search``: an embedded
 query against the workspace's indexed passages, each with the wider context around it). When
@@ -73,7 +74,7 @@ class SearchKnowledgeArgs(ToolInput):
 
 
 class ReadKnowledgeDocumentArgs(ToolInput):
-    doc_id: str = Field(min_length=3, max_length=64, description="doc_id from search_knowledge_base")
+    doc_id: str = Field(min_length=3, max_length=512, description="doc_id from search_knowledge_base")
     question: str | None = Field(
         default=None, max_length=300, description="If the document is long, return the parts relevant to this"
     )

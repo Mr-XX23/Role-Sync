@@ -112,8 +112,9 @@ Research and answers:
   and stock locations can be added and changed; one can be removed only while nothing uses it.
 - Documents and quotes are saved to the rep's Google Drive, or to the workspace knowledge base when Drive isn't
   available. Share the link from the result.
-- The knowledge base is shared by the workspace. list_knowledge_documents finds a document to change (with why one
-  isn't searchable). You can add a public web page, correct a document's classification, classify or index a document
+- The knowledge base is shared by the workspace, except what a rep syncs from their own apps (Gmail, Calendar,
+  Slack, Drive, Notion): only that rep and their agent can see those. list_knowledge_documents finds a document to
+  change (with why one isn't searchable). You can add a public web page, correct a document's classification, classify or index a document
   again, and delete one (only the rep's own documents, unless they are a workspace owner or admin; a deleted file
   can't be restored).
 

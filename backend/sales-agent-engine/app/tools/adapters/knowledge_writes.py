@@ -1,4 +1,5 @@
-"""Knowledge-base changes over data-pipeline's knowledge vault (shared by the workspace).
+"""Knowledge-base changes over data-pipeline's knowledge vault (shared by the workspace, except what a rep
+syncs from their own apps, which data-pipeline shows to that rep only).
 
 As decided for this build (2026-09-14), the agent may add public web pages, correct a document's
 classification, have a document classified or indexed again, and delete documents, each only after
@@ -44,7 +45,7 @@ from app.tools.types import (
     UndoPlan,
 )
 
-DocId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=200)]
+DocId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=512)]
 Tag = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=60)]
 
 _ADMIN_ROLES = frozenset({"OWNER", "ADMIN"})
