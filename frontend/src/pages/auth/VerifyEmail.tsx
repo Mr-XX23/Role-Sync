@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Mail, ShieldCheck, ArrowLeft, AlertCircle, CheckCircle2, ArrowRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { LegalLinks } from '../../components/common/LegalLinks';
 import { Button } from '../../components/common/Button';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { 
@@ -368,6 +369,7 @@ const VerifyEmail: React.FC = () => {
             <p className="font-mono text-[12px] text-muted-foreground/90">
               © {new Date().getFullYear()} RoleSync AI.
             </p>
+            <LegalLinks />
           </div>
         </div>
       </main>

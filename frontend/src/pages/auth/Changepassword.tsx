@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Eye, EyeOff, CheckCircle2, Circle, ArrowLeft, AlertCircle, Shield, UserRoundKey } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
 import { useAppDispatch, useAppSelector } from '../../store';
@@ -154,9 +154,9 @@ const Changepassword: React.FC = () => {
 
             {/* Footer Alternative (Subtle Links) */}
             <div className="mt-8 flex justify-center gap-4 text-xs select-none">
-              <a href="#" className="text-muted-foreground hover:text-primary transition-colors cursor-pointer" onClick={(e) => e.preventDefault()}>Help Center</a>
+              <Link to="/privacy" className="text-muted-foreground hover:text-primary transition-colors">Privacy Policy</Link>
               <span className="text-border">•</span>
-              <a href="#" className="text-muted-foreground hover:text-primary transition-colors cursor-pointer" onClick={(e) => e.preventDefault()}>Terms of Service</a>
+              <Link to="/terms" className="text-muted-foreground hover:text-primary transition-colors">Terms of Service</Link>
             </div>
           </div>
         ) : (

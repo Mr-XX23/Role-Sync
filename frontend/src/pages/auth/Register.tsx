@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { User, Mail, Eye, EyeOff, CheckCircle2, Circle, AlertCircle, Phone, ArrowRight, UserRoundKey } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
 import { useAppDispatch, useAppSelector } from '../../store';
@@ -352,13 +352,13 @@ const Register: React.FC = () => {
                 />
                 <label htmlFor="terms" className="text-xs text-muted-foreground select-none cursor-pointer">
                   I agree to the{' '}
-                  <a href="#" className="text-primary underline underline-offset-2 font-medium hover:opacity-85 transition-opacity" onClick={(e) => e.preventDefault()}>
-                    Terms and Conditions
-                  </a>{' '}
+                  <Link to="/terms" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2 font-medium hover:opacity-85 transition-opacity">
+                    Terms of Service
+                  </Link>{' '}
                   and{' '}
-                  <a href="#" className="text-primary underline underline-offset-2 font-medium hover:opacity-85 transition-opacity" onClick={(e) => e.preventDefault()}>
+                  <Link to="/privacy" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2 font-medium hover:opacity-85 transition-opacity">
                     Privacy Policy
-                  </a>.
+                  </Link>.
                 </label>
               </div>
 
