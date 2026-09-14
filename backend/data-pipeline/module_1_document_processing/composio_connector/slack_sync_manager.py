@@ -5,6 +5,9 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
+from billing.connectors import metered_sync_run, metered_webhook
+from billing.metering import record_composio_execution
+from billing.preflight import allowed_in_background_async, background_check_async
 from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent, EventType
 from module_1_document_processing.composio_connector.composio_client import ComposioClient
 from module_1_document_processing.composio_connector.normalizers.slack_normalizer import normalize_slack
@@ -336,12 +339,15 @@ class SlackSyncManager:
             "connection": conn.to_dict(),
         }
 
+    @metered_sync_run("slack")
     async def execute_sync_job(
         self,
         connection_id: str,
         trigger_type: SlackTriggerType = SlackTriggerType.AUTO_SYNC,
         is_resync: bool = False,
     ) -> None:
+        # The run's Composio executions (listing, history, file downloads) are charged once as
+        # connector.sync when it ends; each message it ingests is charged as document.ingest.
         job_id = f"job_{trigger_type.value.lower()}_{uuid.uuid4().hex[:8]}"
 
         if not self.store.acquire_lock(connection_id=connection_id, job_id=job_id, lease_seconds=900):
@@ -582,6 +588,7 @@ class SlackSyncManager:
 
         try:
             import urllib.request
+            record_composio_execution()  # a proxied call is billed like a tool execution
             res = self.composio._composio.tools.proxy(
                 endpoint=file_url,
                 method="GET",
@@ -608,6 +615,7 @@ class SlackSyncManager:
         tool_slugs = ["SLACK_LIST_CONVERSATIONS", "SLACK_LIST_ALL_CHANNELS", "SLACK_FIND_CHANNELS"]
         for slug in tool_slugs:
             try:
+                record_composio_execution()
                 res = self.composio._composio.tools.execute(
                     slug=slug,
                     arguments={"types": types, "limit": 50},
@@ -628,6 +636,7 @@ class SlackSyncManager:
         tool_slugs = ["SLACK_FETCH_CONVERSATION_HISTORY", "SLACK_FETCH_MESSAGE_THREAD_FROM_A_CONVERSATION"]
         for slug in tool_slugs:
             try:
+                record_composio_execution()
                 res = self.composio._composio.tools.execute(
                     slug=slug,
                     arguments={"channel": channel_id, "limit": min(limit, 30)},
@@ -762,6 +771,7 @@ class SlackSyncManager:
                 "thread_ts": item.get("thread_ts"),
             }
 
+    @metered_webhook("slack")
     async def process_webhook_event(
         self,
         event: CanonicalEvent,
@@ -799,6 +809,12 @@ class SlackSyncManager:
         msg_id = event.external_id
         if self.store.is_message_synced(event.tenant_id, conn.connection_id, msg_id):
             return {"status": "ignored", "reason": "Slack message already synced"}
+
+        # Downloading files and ingesting the message is paid work: a workspace that may not spend
+        # skips the event (logged).
+        credits = await background_check_async(conn.tenant_id, conn.user_id, "Slack webhook ingestion")
+        if not credits.allowed:
+            return {"status": "skipped", "reason": "Workspace credits unavailable", "code": credits.code, "message_id": msg_id}
 
         # If webhook event has file attachments without raw_bytes, attempt download via Composio proxy
         files = event.metadata.get("files", [])
@@ -954,6 +970,10 @@ class SlackSyncManager:
                     last_run = self._last_auto_sync_times.get(conn.connection_id) or conn.last_successful_sync_at
                     if not last_run or (now - last_run) >= timedelta(minutes=interval_mins):
                         if not self.store.is_locked(conn.connection_id):
+                            # A workspace that may not spend is skipped until its next interval (logged).
+                            if not await allowed_in_background_async(conn.tenant_id, conn.user_id, "Slack auto-sync"):
+                                self._last_auto_sync_times[conn.connection_id] = now
+                                continue
                             print(f"[SlackSyncManager] Triggering scheduled auto-sync for {conn.connection_id} (interval={interval_mins}m)...")
                             self._last_auto_sync_times[conn.connection_id] = now
                             asyncio.create_task(

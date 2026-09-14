@@ -1,13 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { User, Mail, Eye, EyeOff, CheckCircle2, Circle, AlertCircle, Phone, ArrowRight, UserRoundKey } from 'lucide-react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { registerUser, clearRegisterState, abortRegistrationFlow } from '../../store/authSlice';
+import { redirectParam, rememberRedirect, withRedirect } from '../../utils/authRedirect';
 
 const Register: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // A page that asked them to sign up first, e.g. /pricing.
+  const redirect = redirectParam(searchParams);
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -25,10 +29,12 @@ const Register: React.FC = () => {
   // Redirect to correct verification page after successful registration
   useEffect(() => {
     if (registerSuccess) {
+      // Verification ends on the sign-in page: keep where they were headed until they sign in.
+      rememberRedirect(redirect);
       navigate('/verify-email');
       dispatch(clearRegisterState());
     }
-  }, [registerSuccess, navigate, dispatch]);
+  }, [registerSuccess, navigate, dispatch, redirect]);
 
   // Clear state on mount and unmount
   useEffect(() => {
@@ -148,7 +154,7 @@ const Register: React.FC = () => {
                 href="#"
                 onClick={(e) => {
                   e.preventDefault();
-                  navigate('/signin');
+                  navigate(withRedirect('/signin', redirect));
                 }}
               >
                 Sign in

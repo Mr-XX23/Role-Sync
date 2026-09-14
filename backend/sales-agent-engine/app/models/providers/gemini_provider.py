@@ -75,8 +75,9 @@ class GeminiProvider:
                 if chunk.usage_metadata is not None:
                     meta = chunk.usage_metadata
                     usage = Usage(
-                        input_tokens=meta.prompt_token_count or 0,
+                        input_tokens=meta.prompt_token_count or 0,  # includes the cached part
                         output_tokens=(meta.candidates_token_count or 0) + (meta.thoughts_token_count or 0),
+                        cached_input_tokens=meta.cached_content_token_count or 0,
                     )
                 for candidate in chunk.candidates or ():
                     if candidate.finish_reason is not None:
@@ -106,13 +107,14 @@ class GeminiProvider:
                                 yield TextDelta(part.text)
                             if part.thought_signature and text_signature is None:
                                 text_signature = _encode(part.thought_signature)
+        # Failures carry the usage reported so far: tokens produced before an error are billed all the same.
         except errors.APIError as exc:
-            raise _map_api_error(exc) from exc
+            raise _map_api_error(exc).with_usage(usage, model) from exc
         except (httpx.HTTPError, TimeoutError, OSError) as exc:
-            raise ProviderUnavailable(f"gemini request failed: {type(exc).__name__}") from exc
+            raise ProviderUnavailable(f"gemini request failed: {type(exc).__name__}").with_usage(usage, model) from exc
 
         if not text and not calls:
-            raise ProviderError(f"gemini returned no content (finish_reason={finish_reason})")
+            raise ProviderError(f"gemini returned no content (finish_reason={finish_reason})").with_usage(usage, model)
         message = Message(role=Role.ASSISTANT, content="".join(text), tool_calls=tuple(calls), signature=text_signature)
         yield StreamDone(
             Completion(

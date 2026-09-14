@@ -2,6 +2,8 @@ import asyncio
 import inspect
 import os
 from typing import Any, Callable
+from billing.charges import IngestCharge, hash_content
+from billing.metering import UsageMeter, usage_scope
 from module_1_document_processing.connector_privacy import chunk_acl, document_id
 from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent, EventType
 from module_1_document_processing.security.security_scanner import SecurityScanner, ScanResult
@@ -322,8 +324,38 @@ class QueueWorker:
             return "failed"
 
     async def _process_event(self, event: CanonicalEvent, skip_gatekeeper: bool = False) -> str:
+        """Scan, parse, gate and classify one connector event, then queue its embedding.
+
+        Credits: what this spends (LlamaParse pages for attachments, the gatekeeper's scorer, the
+        classifier) is collected while it runs - joined with the pages a sync manager spent parsing the
+        item while downloading it, when the manager opened a usage scope for the item. A document that
+        stops here is charged here as document.ingest (CONNECTORS for a synced item); one that goes on
+        carries the usage to its embed job, which charges it once. The key is the document id, a hash of
+        its content and the stage, so the same content delivered again is never charged twice.
+        """
+        charge = IngestCharge(workspace_id=event.tenant_id, user_id=event.user_id, doc_id="", source=event.source)
+        with usage_scope(join=True) as usage:
+            outcome = await self._run_event_stages(event, skip_gatekeeper, charge, usage)
+        if outcome != OUTCOME_EMBED_QUEUED and charge.doc_id and not usage.is_empty():
+            # A blocking HTTP call; keep it off the event loop like the stages themselves.
+            await asyncio.to_thread(charge.charge, "held" if outcome == OUTCOME_HELD else "parse", usage)
+        return outcome
+
+    @staticmethod
+    def _event_content(event: CanonicalEvent) -> Any:
+        meta = event.metadata or {}
+        raw = meta.get("raw_bytes")
+        if isinstance(raw, (bytes, bytearray)) and raw:
+            return bytes(raw)
+        return meta.get("text_content") or meta.get("body") or meta.get("text") or event.external_id or ""
+
+    async def _run_event_stages(
+        self, event: CanonicalEvent, skip_gatekeeper: bool, charge: IngestCharge, usage: UsageMeter
+    ) -> str:
         print(f"[QueueWorker] Processing event_id={event.event_id} type={event.event_type} from source={event.source}")
         doc_id = document_id(event.tenant_id, event.source, event.user_id, event.external_id)
+        charge.doc_id = doc_id
+        charge.content_hash = hash_content(self._event_content(event))
 
         # 1. Security Scan & Sanitization
         scan_res: ScanResult = self.scanner.scan_and_sanitize_event(event)
@@ -379,6 +411,8 @@ class QueueWorker:
 
         print(f"[QueueWorker] Parsed doc_id={doc_id} using '{parsed_doc.parser_used}' (Status: {parsed_doc.parse_status}, Content length: {len(parsed_doc.text_content)})")
         self.store.record_event(sanitized_event, status="PARSED_SUCCESS")
+        # The parsed text is what is indexed, so its hash identifies the content for billing.
+        charge.content_hash = hash_content(parsed_doc.text_content or "")
 
         # 4. Memory Gatekeeper Evaluation
         if skip_gatekeeper:
@@ -431,6 +465,8 @@ class QueueWorker:
                 "parser_used": parsed_doc.parser_used,
                 "parse_status": parsed_doc.parse_status,
                 "metadata": parsed_doc.metadata,
+                # The usage spent so far: the embed job charges the document once.
+                "billing": charge.carry(usage),
             },
         )
         self.store.record_event(sanitized_event, status="EMBEDDING_QUEUED")

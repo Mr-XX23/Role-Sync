@@ -20,6 +20,7 @@ from uuid import UUID
 
 from redis.asyncio import Redis
 
+from app.billing.scope import usage_scope
 from app.core.context import AgentContext
 from app.core.enums import SkillCategory, SkillUse, SkillVisibility
 from app.core.errors import BadRequest, Conflict, NotFound, TenantAccessDenied, TooManyRequests, UpstreamUnavailable, ValidationFailed
@@ -422,7 +423,8 @@ class SkillService:
             max_output_tokens=3_000,
         )
         try:
-            completion = await self._router.complete(task)
+            with usage_scope(tenant_id, user_id):  # not part of a run: the draft's model call is charged here
+                completion = await self._router.complete(task)
         except ProviderError as exc:
             raise UpstreamUnavailable(f"the model couldn't draft the skill right now: {exc}") from exc
         try:

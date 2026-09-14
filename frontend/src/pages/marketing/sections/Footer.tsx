@@ -13,6 +13,7 @@ const COLUMNS = [
       { label: 'Features', to: '/features' },
       { label: 'How it works', to: '/how-it-works' },
       { label: 'Integrations', to: '/integrations' },
+      { label: 'Pricing', to: '/pricing' },
       { label: 'Security', to: '/security' },
     ],
   },

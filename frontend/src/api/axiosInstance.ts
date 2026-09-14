@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { readableCreditsBody, readCreditsRequired, reportCreditsRequired } from './creditEvents';
 
 let logoutCallback: (() => void) | null = null;
 let activeUserId: string | null = null;
@@ -51,6 +52,16 @@ const processQueue = (error: any) => {
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
+    // 402 from any service: the workspace needs credits. Tell the app (it refreshes the balance and
+    // shows a notice) and make the body's message readable wherever the caller displays it.
+    // Nothing to refresh or retry, so the session handling below doesn't apply.
+    if (error.response?.status === 402) {
+      const creditsRequired = readCreditsRequired(error.response.data);
+      error.response.data = readableCreditsBody(error.response.data, creditsRequired);
+      reportCreditsRequired(creditsRequired);
+      return Promise.reject(error);
+    }
+
     const originalRequest = error.config;
 
     if (!originalRequest) {

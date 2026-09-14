@@ -5,6 +5,9 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
+from billing.connectors import metered_sync_run, metered_webhook
+from billing.metering import record_composio_execution
+from billing.preflight import allowed_in_background_async, background_check_async
 from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent, EventType
 from module_1_document_processing.composio_connector.composio_client import ComposioClient
 from module_1_document_processing.composio_connector.normalizers.notion_normalizer import normalize_notion
@@ -336,12 +339,15 @@ class NotionSyncManager:
             "connection": conn.to_dict(),
         }
 
+    @metered_sync_run("notion")
     async def execute_sync_job(
         self,
         connection_id: str,
         trigger_type: NotionTriggerType = NotionTriggerType.AUTO_SYNC,
         is_resync: bool = False,
     ) -> None:
+        # The run's Composio executions are charged once as connector.sync when it ends; each record it
+        # ingests is charged as document.ingest.
         job_id = f"job_{trigger_type.value.lower()}_{uuid.uuid4().hex[:8]}"
 
         if not self.store.acquire_lock(connection_id=connection_id, job_id=job_id, lease_seconds=900):
@@ -521,6 +527,7 @@ class NotionSyncManager:
         tool_slugs = ["NOTION_SEARCH_NOTION_PAGE"]
         for slug in tool_slugs:
             try:
+                record_composio_execution()
                 res = self.composio._composio.tools.execute(
                     slug=slug,
                     arguments={"page_size": min(limit, 30)},
@@ -615,6 +622,7 @@ class NotionSyncManager:
                 "url": item.get("url"),
             }
 
+    @metered_webhook("notion")
     async def process_webhook_event(
         self,
         event: CanonicalEvent,
@@ -652,6 +660,11 @@ class NotionSyncManager:
         rec_id = event.external_id
         if self.store.is_record_synced(event.tenant_id, conn.connection_id, rec_id):
             return {"status": "ignored", "reason": "Notion record already synced"}
+
+        # Ingesting the record is paid work: a workspace that may not spend skips the event (logged).
+        credits = await background_check_async(conn.tenant_id, conn.user_id, "Notion webhook ingestion")
+        if not credits.allowed:
+            return {"status": "skipped", "reason": "Workspace credits unavailable", "code": credits.code, "record_id": rec_id}
 
         await self.queue_worker._process_event(event)
 
@@ -786,6 +799,10 @@ class NotionSyncManager:
                     last_run = self._last_auto_sync_times.get(conn.connection_id) or conn.last_successful_sync_at
                     if not last_run or (now - last_run) >= timedelta(minutes=interval_mins):
                         if not self.store.is_locked(conn.connection_id):
+                            # A workspace that may not spend is skipped until its next interval (logged).
+                            if not await allowed_in_background_async(conn.tenant_id, conn.user_id, "Notion auto-sync"):
+                                self._last_auto_sync_times[conn.connection_id] = now
+                                continue
                             print(f"[NotionSyncManager] Triggering scheduled auto-sync for {conn.connection_id} (interval={interval_mins}m)...")
                             self._last_auto_sync_times[conn.connection_id] = now
                             asyncio.create_task(

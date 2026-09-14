@@ -8,6 +8,9 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Background
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from billing.charges import IngestCharge, charge_knowledge_search, charge_reclassify, hash_content, new_run_id
+from billing.metering import UsageMeter, usage_scope
+from billing.preflight import require_credits, require_credits_async
 from module_1_document_processing.identity import bind_identity
 from module_1_document_processing.workspace_access import WorkspaceAccess, require_workspace_member, require_writer
 from module_1_document_processing.connector_privacy import chunk_acl, is_connector_source, visible_records_filter, visible_to
@@ -407,12 +410,58 @@ def _process_document_background(
     user_override_category: Optional[str] = None,
     user_override_competitor: Optional[str] = None,
     skip_gatekeeper: bool = False,
+    billing: Optional[dict[str, Any]] = None,
 ) -> str:
     """
     Parses document through ParserService (LlamaParse/LlamaIndex with local OCR fallback),
     runs SalesClassifier (OpenRouter AI with local heuristic fallback) to categorize the collateral,
     and processes through BatchIngestionPipeline using active RAG parameters.
+
+    Credits: what this stage spends (LlamaParse pages, the gatekeeper's scorer, the classifier) is
+    collected while it runs. A document that stops here - held by the gatekeeper, unreadable, media -
+    is charged here. One that goes on carries the usage in its embed job, which charges the document
+    once for everything (``billing`` is the run the job belongs to; see IngestCharge). An attempt that
+    fails raises and is not charged; its retry is, under the same key.
     """
+    charge = IngestCharge.for_job(
+        billing, workspace_id=tenant_id, user_id=user_id, doc_id=doc_id, source=source, content=raw_bytes
+    )
+    with usage_scope() as usage:
+        outcome = _parse_and_classify_document(
+            doc_id=doc_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            raw_bytes=raw_bytes,
+            filename=filename,
+            mime_type=mime_type,
+            source=source,
+            user_override_category=user_override_category,
+            user_override_competitor=user_override_competitor,
+            skip_gatekeeper=skip_gatekeeper,
+            charge=charge,
+            usage=usage,
+        )
+    if outcome != OUTCOME_EMBED_QUEUED:
+        charge.charge("held" if outcome == OUTCOME_HELD else "parse", usage)
+    return outcome
+
+
+def _parse_and_classify_document(
+    *,
+    doc_id: str,
+    tenant_id: str,
+    user_id: str,
+    raw_bytes: bytes,
+    filename: str,
+    mime_type: str,
+    source: str,
+    user_override_category: Optional[str],
+    user_override_competitor: Optional[str],
+    skip_gatekeeper: bool,
+    charge: IngestCharge,
+    usage: UsageMeter,
+) -> str:
+    """The parse, gatekeeper and classify stage of ``_process_document_background``."""
     try:
         # 1. Read current workspace RAG config
         cfg = _get_rag_config(tenant_id, user_id)
@@ -578,6 +627,8 @@ def _process_document_background(
                 "parse_status": parsed_doc.parse_status,
                 "metadata": parsed_doc.metadata,
                 "embedding_engine": embedding_engine,
+                # This run and the usage spent so far: the embed job charges the document once.
+                "billing": charge.carry(usage),
             },
         )
         canonical_store.record_event(event, status="EMBEDDING_QUEUED")
@@ -637,7 +688,20 @@ def process_embed_job(payload: dict) -> None:
 
     embedding_worker = EmbeddingWorker(model_name=payload.get("embedding_engine") or "RoleSync Vector Engine (1536-dim)")
     batch_pipeline = BatchIngestionPipeline(embedding_worker=embedding_worker)
-    written_count = batch_pipeline.process_document(parsed_doc)
+    # Embedding is the last paid step. The document is charged now, once, for everything its
+    # ingestion spent: the parse stage's usage arrives in the payload. A failed attempt raises before
+    # this and is not charged; a retry reuses the run, so it can never be charged twice.
+    charge = IngestCharge.for_job(
+        payload.get("billing"),
+        workspace_id=payload.get("tenant_id", ""),
+        user_id=payload.get("user_id", ""),
+        doc_id=doc_id,
+        source=payload.get("source", "USER_UPLOAD"),
+        content=text,
+    )
+    with usage_scope() as usage:
+        written_count = batch_pipeline.process_document(parsed_doc)
+    charge.charge("index", usage)
 
     # Zero written is ambiguous. It can mean nothing was indexable, or that the
     # delta check found every chunk already indexed - a re-sync of unchanged
@@ -782,6 +846,7 @@ def _queue_document_job(
     source: str,
     user_override_category: Optional[str] = None,
     user_override_competitor: Optional[str] = None,
+    actor_user_id: Optional[str] = None,
 ) -> None:
     """Hand parsing and indexing to the durable queue.
 
@@ -789,7 +854,11 @@ def _queue_document_job(
     "queued for parsing" answer the caller gets is backed by something that
     survives a restart. FastAPI BackgroundTasks remains only as the fallback for
     when nothing durable is reachable - the old behaviour, not a silent loss.
+
+    Every call starts a new billing run (``actor_user_id`` is who asked for it): the
+    document is charged once for this processing, however many retries it takes.
     """
+    billing = {"run_id": new_run_id(), "user_id": actor_user_id or user_id}
     staged_ref = stage_bytes(tenant_id, doc_id, raw_bytes, content_type=mime_type)
     if staged_ref:
         ingest_queue.enqueue(
@@ -804,6 +873,7 @@ def _queue_document_job(
                 "staged_ref": staged_ref,
                 "user_override_category": user_override_category,
                 "user_override_competitor": user_override_competitor,
+                "billing": billing,
             },
         )
         return
@@ -820,6 +890,7 @@ def _queue_document_job(
         source=source,
         user_override_category=user_override_category,
         user_override_competitor=user_override_competitor,
+        billing=billing,
     )
 
 
@@ -854,6 +925,7 @@ def process_document_job(payload: dict) -> None:
         user_override_category=payload.get("user_override_category"),
         user_override_competitor=payload.get("user_override_competitor"),
         skip_gatekeeper=bool(payload.get("skip_gatekeeper")),
+        billing=payload.get("billing"),
     )
 
     if outcome == OUTCOME_HELD:
@@ -905,6 +977,9 @@ async def upload_document(
     """Uploads a single file (PDF, CSV, TXT, DOCX, PPTX, XLSX, MD, JSON), validates <=25MB, runs SalesClassifier, and processes chunks via ParserService and BatchIngestionPipeline."""
     require_writer(access)
     _reject_if_backlogged()
+    # Ingestion is paid work (parsing, scoring, classifying, embedding): refuse it with 402 before
+    # the file is read or stored when the workspace may not spend. Chat attachments come through here too.
+    await require_credits_async(access.workspace_id, access.user_id)
     filename = file.filename or "uploaded_file"
 
     # Read first so type, size and malware checks all run against the real bytes.
@@ -1003,6 +1078,7 @@ async def upload_document(
         source="USER_UPLOAD",
         user_override_category=category,
         user_override_competitor=target_competitor,
+        actor_user_id=access.user_id,
     )
 
     return {
@@ -1025,6 +1101,8 @@ def ingest_url(
     """Ingests text content from an external webpage URL and runs SalesClassifier."""
     require_writer(access)
     _reject_if_backlogged()
+    # Paid ingestion: refused with 402 before the page is fetched when the workspace may not spend.
+    require_credits(access.workspace_id, access.user_id)
     url = req.url.strip()
     if not re.match(r"^https?://[^\s/$.?#].[^\s]*$", url, re.IGNORECASE):
         raise HTTPException(status_code=400, detail="Invalid URL format. Must start with http:// or https://")
@@ -1133,6 +1211,7 @@ def ingest_url(
         source="URL_INGEST",
         user_override_category=req.category,
         user_override_competitor=req.target_competitor,
+        actor_user_id=access.user_id,
     )
 
     return {
@@ -1197,6 +1276,7 @@ def update_sales_classification(
 @router.post("/knowledge-vault/documents/{doc_id}/reclassify")
 def reclassify_document(
     doc_id: str,
+    background_tasks: BackgroundTasks,
     access: WorkspaceAccess = Depends(require_workspace_member),
 ):
     """Re-runs the SalesClassifier (OpenRouter AI + heuristics) on an existing document."""
@@ -1204,15 +1284,22 @@ def reclassify_document(
     doc = _find_visible_doc(doc_id, access)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
+    # A model call: refused with 402 before it is made when the workspace may not spend.
+    require_credits(access.workspace_id, access.user_id)
 
     # Reclassify against the FULL document text (the classifier samples it within a
     # token budget), not the tiny stored preview snippet. Fall back to the snippet
     # only if the full text isn't available (e.g. not yet indexed).
     full_text = raw_document_store.get_full_text(doc_id) or doc.get("metadata", {}).get("preview_snippet", doc.get("name", ""))
-    classification = sales_classifier.classify(
-        filename=doc.get("name", ""),
-        mime_type=doc.get("metadata", {}).get("content_type", "text/plain"),
-        text_content=full_text,
+    with usage_scope() as usage:
+        classification = sales_classifier.classify(
+            filename=doc.get("name", ""),
+            mime_type=doc.get("metadata", {}).get("content_type", "text/plain"),
+            text_content=full_text,
+        )
+    # Reported after the response is sent, so billing never slows the answer down.
+    background_tasks.add_task(
+        charge_reclassify, workspace_id=access.workspace_id, user_id=access.user_id, doc_id=doc_id, meter=usage
     )
 
     doc["category"] = classification.category
@@ -1410,8 +1497,11 @@ def reindex_document(
     doc = _find_visible_doc(doc_id, access)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
+    # Re-indexing re-embeds (and for an upload re-parses and re-classifies): refused with 402 before
+    # the old index is dropped when the workspace may not spend. The new run is charged again.
+    require_credits(access.workspace_id, access.user_id)
     if is_connector_source(doc.get("source")):
-        return _reindex_synced_document(doc)
+        return _reindex_synced_document(doc, actor_user_id=access.user_id)
 
     # Remove the old vectors and their fingerprints, so unchanged content is embedded again
     _drop_index(doc)
@@ -1449,6 +1539,7 @@ def reindex_document(
         source=doc.get("source", "USER_UPLOAD"),
         user_override_category=doc.get("category"),
         user_override_competitor=doc.get("target_competitor"),
+        actor_user_id=access.user_id,
     )
 
     return {
@@ -1458,11 +1549,12 @@ def reindex_document(
     }
 
 
-def _reindex_synced_document(doc: dict[str, Any]) -> dict[str, Any]:
+def _reindex_synced_document(doc: dict[str, Any], actor_user_id: Optional[str] = None) -> dict[str, Any]:
     """Embed a synced document again from the text stored when it was synced. The provider keeps the original,
     so there is nothing to parse or classify again, and it stays its rep's: same pipeline id, same private ACL."""
     doc_id = doc["doc_id"]
-    if not raw_document_store.get_full_text(doc_id):
+    stored_text = raw_document_store.get_full_text(doc_id)
+    if not stored_text:
         raise HTTPException(
             status_code=409,
             detail="The text of this synced document isn't stored any more. Sync the app again to bring it back.",
@@ -1490,6 +1582,12 @@ def _reindex_synced_document(doc: dict[str, Any]) -> dict[str, Any]:
             "mime_type": "text/plain",
             "acl": chunk_acl(source, owner, lineage.acl if lineage else []),
             "metadata": dict(doc.get("metadata") or {}),
+            # A reindex is a new run, charged (embedding only) once however often the job is retried.
+            "billing": {
+                "run_id": new_run_id(),
+                "user_id": actor_user_id or owner,
+                "content_hash": hash_content(stored_text),
+            },
         },
     )
     return {
@@ -1641,6 +1739,7 @@ class VaultSearchRequest(BaseModel):
 @router.post("/knowledge-vault/search")
 def search_knowledge_vault(
     req: VaultSearchRequest,
+    background_tasks: BackgroundTasks,
     access: WorkspaceAccess = Depends(require_workspace_member),
 ):
     """Semantic search across indexed chunks.
@@ -1648,7 +1747,13 @@ def search_knowledge_vault(
     Embeds the query (RETRIEVAL_QUERY) and runs an ANN lookup against the HNSW
     index, with the workspace and the caller's ACL applied as filters.
     """
-    query_vector = query_embedder.embed_query(req.query)
+    # Search is near-free, so it is never refused for credits; the query embedding is charged,
+    # after the response is sent so billing never slows a search down.
+    with usage_scope() as usage:
+        query_vector = query_embedder.embed_query(req.query)
+    background_tasks.add_task(
+        charge_knowledge_search, workspace_id=access.workspace_id, user_id=access.user_id, meter=usage
+    )
     if query_vector is None:
         raise HTTPException(
             status_code=503,

@@ -12,6 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from billing.preflight import require_credits
 from module_1_document_processing.connector_privacy import visible_to
 from module_1_document_processing.identity import bind_identity
 from module_1_document_processing.workspace_access import (
@@ -119,6 +120,10 @@ def release_hold(doc_id: str, access: WorkspaceAccess = Depends(require_workspac
             detail=guards.QUEUE_FULL_MESSAGE,
             headers={"Retry-After": "120"},
         )
+    # The replay parses, classifies and embeds the document again - paid work, refused with 402
+    # (before releasing, for the same reason) when the workspace may not spend.
+    if can_replay:
+        require_credits(access.workspace_id, access.user_id)
 
     # Release by the canonical id the hold is stored under, not the caller's form.
     if not gatekeeper_store.release(hold.doc_id):

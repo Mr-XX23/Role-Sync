@@ -4,6 +4,9 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
+from billing.connectors import metered_sync_run, metered_webhook
+from billing.metering import record_composio_execution
+from billing.preflight import allowed_in_background_async, background_check_async
 from module_1_document_processing.connector_privacy import document_id
 from module_1_document_processing.composio_connector.composio_client import ComposioClient
 from module_1_document_processing.composio_connector.calendar_models import (
@@ -294,6 +297,7 @@ class CalendarSyncManager:
             "connection_id": conn.connection_id,
         }
 
+    @metered_sync_run("google_calendar")
     async def start_sync_job(
         self,
         connection_id: str,
@@ -304,6 +308,9 @@ class CalendarSyncManager:
         Executes two-phase synchronization:
         Phase 1: Ingest future 1-year events (now to now + 365 days) on Primary Calendar by default.
         Phase 2: Ingest historical past 180-day events (now - 180 days to now).
+
+        The run's Composio executions are charged once as connector.sync when it ends; each event it
+        ingests is charged as document.ingest.
         """
         job_id = f"job_cal_{uuid.uuid4().hex[:8]}"
         acquired = self.store.acquire_lock(connection_id=connection_id, job_id=job_id, lease_seconds=900)
@@ -722,6 +729,7 @@ class CalendarSyncManager:
         tool_slugs = ["GOOGLECALENDAR_FIND_EVENT", "GOOGLECALENDAR_EVENTS_LIST"]
         for slug in tool_slugs:
             try:
+                record_composio_execution()
                 res = self.composio._composio.tools.execute(
                     slug=slug,
                     arguments=args,
@@ -769,6 +777,7 @@ class CalendarSyncManager:
         ]
         for slug, args in tools_to_try:
             try:
+                record_composio_execution()
                 res = self.composio._composio.tools.execute(
                     slug=slug,
                     arguments=args,
@@ -784,6 +793,7 @@ class CalendarSyncManager:
                 print(f"[CalendarSyncManager] Failed to enrich event {event_id} via {slug}: {e}")
         return None
 
+    @metered_webhook("google_calendar")
     async def process_webhook_event(self, event: CanonicalEvent, raw_payload: dict[str, Any] | None = None) -> dict[str, Any]:
         """Processes incoming real-time Google Calendar webhook notifications."""
         user_id = event.user_id
@@ -845,6 +855,17 @@ class CalendarSyncManager:
         if not is_update and self.store.is_event_synced(conn.tenant_id, conn.connection_id, event_id):
             print(f"[CalendarSyncManager] Webhook: event_id={event_id} already synced. Skipping duplicate.")
             return {"status": "ignored", "reason": "Duplicate event (already indexed)", "event_id": event_id}
+
+        # Enriching and ingesting the event is paid work: a workspace that may not spend skips it
+        # (logged). Cancellations above are free and always applied.
+        credits = await background_check_async(conn.tenant_id, conn.user_id, "Google Calendar webhook ingestion")
+        if not credits.allowed:
+            return {
+                "status": "skipped",
+                "reason": "Workspace credits unavailable",
+                "code": credits.code,
+                "event_id": event_id,
+            }
 
         activity = CalendarSyncActivity(
             activity_id=f"act_cal_webhook_{uuid.uuid4().hex[:8]}",
@@ -958,6 +979,10 @@ class CalendarSyncManager:
                     last_sync = self._last_auto_sync_times.get(conn.connection_id) or conn.last_successful_sync_at or conn.created_at
                     if (now - last_sync).total_seconds() >= (interval_m * 60):
                         if not self.store.is_locked(conn.connection_id):
+                            # A workspace that may not spend is skipped until its next interval (logged).
+                            if not await allowed_in_background_async(conn.tenant_id, conn.user_id, "Google Calendar auto-sync"):
+                                self._last_auto_sync_times[conn.connection_id] = now
+                                continue
                             print(f"[CalendarSyncManager] Triggering background auto-sync for {conn.connection_id} (interval: {interval_m}m)...")
                             asyncio.create_task(self.start_sync_job(conn.connection_id, trigger_type=CalendarTriggerType.AUTO_SYNC))
             except asyncio.CancelledError:

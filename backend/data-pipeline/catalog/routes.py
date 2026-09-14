@@ -3,9 +3,12 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple, Union
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
+from billing.charges import charge_catalog_ai
+from billing.metering import usage_scope
+from billing.preflight import require_credits
 from catalog.auth import CatalogContext, get_catalog_context, get_catalog_writer_context
 from catalog.database import get_catalog_db
 from catalog.schemas import (
@@ -90,32 +93,48 @@ def describe_catalog(
 @router.post("/ai/generate-findability", response_model=GenerateFindabilityResponse)
 def generate_product_findability(
     data: GenerateFindabilityRequest,
+    background_tasks: BackgroundTasks,
     ctx: CatalogContext = Depends(get_catalog_context),
     service: ProductService = Depends(get_service),
 ):
     """Auto-generate AI agent findability, keywords, use-cases, and sales intelligence."""
-    return service.generate_findability(
-        name=data.name,
-        prod_type=data.type,
-        category=data.category,
-        subcategory=data.subcategory,
-        description=data.description,
+    # Paid model work: a workspace out of credits gets 402 before any model is called.
+    require_credits(ctx.tenant_id, ctx.user_id)
+    with usage_scope() as usage:
+        result = service.generate_findability(
+            name=data.name,
+            prod_type=data.type,
+            category=data.category,
+            subcategory=data.subcategory,
+            description=data.description,
+        )
+    # Reported after the response is sent, so billing never slows the answer down.
+    background_tasks.add_task(
+        charge_catalog_ai, workspace_id=ctx.tenant_id, user_id=ctx.user_id, feature="findability", meter=usage
     )
+    return result
 
 
 @router.post("/ai/semantic-search", response_model=SemanticSearchResponse)
 def semantic_search_catalog(
     data: SemanticSearchRequest,
+    background_tasks: BackgroundTasks,
     ctx: CatalogContext = Depends(get_catalog_context),
     service: ProductService = Depends(get_service),
 ):
     """Relevance-ranked catalog search, optionally widened by LLM query expansion."""
-    return service.semantic_search(
-        tenant_id=ctx.tenant_id,
-        query=data.query,
-        limit=data.limit,
-        expand=data.expand,
+    # Search is near-free and never refused for credits; its query expansion is charged.
+    with usage_scope() as usage:
+        result = service.semantic_search(
+            tenant_id=ctx.tenant_id,
+            query=data.query,
+            limit=data.limit,
+            expand=data.expand,
+        )
+    background_tasks.add_task(
+        charge_catalog_ai, workspace_id=ctx.tenant_id, user_id=ctx.user_id, feature="query_expansion", meter=usage
     )
+    return result
 
 
 # ---------------------------------------------------------------------------

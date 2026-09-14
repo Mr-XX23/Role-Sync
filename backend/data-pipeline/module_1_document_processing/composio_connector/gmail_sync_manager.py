@@ -5,6 +5,8 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
+from billing.connectors import metered_sync_run, metered_webhook
+from billing.preflight import allowed_in_background_async, background_check_async
 from module_1_document_processing.connector_privacy import document_id
 from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent, EventType
 from module_1_document_processing.composio_connector.composio_client import ComposioClient
@@ -390,6 +392,7 @@ class GmailSyncManager:
             "connection": conn.to_dict(),
         }
 
+    @metered_sync_run("gmail")
     async def execute_sync_job(
         self,
         connection_id: str,
@@ -400,6 +403,9 @@ class GmailSyncManager:
         Core sync execution handling decoupled historical backfill and forward incremental sync.
         - While historical_sync_status != COMPLETED: fetches historical slices from newest to boundary.
         - When historical_sync_status == COMPLETED: executes forward incremental queries for new emails.
+
+        The Composio executions the run makes are charged once as connector.sync when it ends; each
+        email it ingests is charged as document.ingest by the pipeline.
         """
         job_id = f"job_{trigger_type.value.lower()}_{uuid.uuid4().hex[:8]}"
         
@@ -660,6 +666,7 @@ class GmailSyncManager:
             })
             return None
 
+    @metered_webhook("gmail")
     async def process_webhook_event(
         self,
         event: CanonicalEvent,
@@ -693,6 +700,17 @@ class GmailSyncManager:
             return {
                 "status": "ignored",
                 "reason": "Duplicate message (already indexed)",
+                "message_id": msg_id,
+                "connection_id": conn.connection_id,
+            }
+
+        # Ingesting it is paid work: a workspace that may not spend skips the event (logged).
+        credits = await background_check_async(conn.tenant_id, conn.user_id, "Gmail webhook ingestion")
+        if not credits.allowed:
+            return {
+                "status": "skipped",
+                "reason": "Workspace credits unavailable",
+                "code": credits.code,
                 "message_id": msg_id,
                 "connection_id": conn.connection_id,
             }
@@ -1032,6 +1050,9 @@ class GmailSyncManager:
                         continue
 
                     self._last_auto_sync_times[conn.connection_id] = now
+                    # A workspace that may not spend is skipped until its next interval (logged).
+                    if not await allowed_in_background_async(conn.tenant_id, conn.user_id, "Gmail auto-sync"):
+                        continue
                     if conn.backfill_state.historical_sync_status == HistoricalSyncStatus.IN_PROGRESS:
                         print(f"[GmailSyncManager] Auto-sync ({interval_mins}m) continuing historical backfill for {conn.connection_id}...")
                         asyncio.create_task(self.execute_sync_job(conn.connection_id, trigger_type=GmailTriggerType.AUTO_SYNC))

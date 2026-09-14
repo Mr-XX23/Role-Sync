@@ -109,8 +109,9 @@ class TaskSpec:
 
 @dataclass(frozen=True, slots=True)
 class Usage:
-    input_tokens: int = 0
-    output_tokens: int = 0
+    input_tokens: int = 0  # the whole prompt, cached tokens included
+    output_tokens: int = 0  # the answer, thinking included
+    cached_input_tokens: int = 0  # the part of the prompt the provider served from its cache
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +161,17 @@ StreamEvent = TextDelta | StreamRestart | StreamDone
 
 class ProviderError(Exception):
     """Any failure from a model provider. The router fails over on these."""
+
+    # What the call had already used when it failed (tokens streamed or spent thinking are billed by the
+    # vendor all the same), and on which model; ``None`` when the provider reported nothing.
+    usage: Usage | None = None
+    model: str | None = None
+
+    def with_usage(self, usage: Usage, model: str | None) -> ProviderError:
+        if usage.input_tokens or usage.output_tokens:
+            self.usage = usage
+            self.model = model
+        return self
 
 
 class RateLimited(ProviderError):

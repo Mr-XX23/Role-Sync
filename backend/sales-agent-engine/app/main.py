@@ -33,6 +33,9 @@ def create_app(settings: Settings | None = None, *, container_factory: Container
         background.append(asyncio.create_task(container.runner.run_maintenance(), name="run-maintenance"))
         if container.admin is not None:  # re-reads the Super Admin Console overrides every few seconds
             background.append(asyncio.create_task(container.admin.run_forever(), name="admin-overrides"))
+        if container.billing.enabled:
+            # Usage billing-service couldn't take when it happened is sent again (same idempotency key).
+            background.append(asyncio.create_task(container.billing.run_pending_drainer(), name="billing-pending-usage"))
         registered = settings.eureka_enabled and await eureka.register(settings)
         try:
             yield

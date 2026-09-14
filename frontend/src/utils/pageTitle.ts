@@ -15,6 +15,8 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/contact': 'Contact',
   '/privacy': 'Privacy Policy',
   '/terms': 'Terms of Service',
+  '/pricing': 'Pricing',
+  '/billing/success': 'Payment',
 
   // Auth & Onboarding
   '/signin': 'Sign In',
@@ -38,6 +40,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/salesman/products': 'Product Management',
   '/salesman/external-connector': 'Data Connectors',
   '/salesman/users': 'User Management',
+  '/salesman/credits': 'Credits & Usage',
   '/salesman/profile': 'Profile',
   '/salesman/settings': 'Settings',
   '/salesman/support': 'Support',
@@ -49,6 +52,9 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/admin/overview': 'Overview | Admin',
   '/admin/users': 'Users | Admin',
   '/admin/workspaces': 'Workspaces | Admin',
+  '/admin/billing': 'Billing | Admin',
+  '/admin/credits': 'Credits | Admin',
+  '/admin/payments': 'Payments | Admin',
   '/admin/support': 'Support Tickets | Admin',
   '/admin/agents': 'Agent Manager | Admin',
   '/admin/models': 'AI Models | Admin',

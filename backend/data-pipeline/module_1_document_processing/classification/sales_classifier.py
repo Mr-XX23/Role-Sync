@@ -4,6 +4,8 @@ import re
 from typing import Any, Optional
 from pydantic import BaseModel, Field
 
+from billing.metering import record_openrouter_usage
+
 # Supported Sales Taxonomy Categories
 VALID_SALES_CATEGORIES = {
     "BATTLECARD",
@@ -435,6 +437,12 @@ class SalesClassifier:
         except ValueError:
             print(f"[SalesClassifier] {label} returned a non-JSON response body")
             return _RETRY
+
+        # Every answered request spent tokens, including a reply rejected below. They are charged
+        # against the model that actually served it (openrouter/free picks one per request).
+        record_openrouter_usage(
+            data, model, purpose="classifier", prompt_chars=len(system_prompt) + len(user_content)
+        )
 
         served = data.get("model") or model
         choice = (data.get("choices") or [{}])[0]
