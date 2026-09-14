@@ -179,8 +179,9 @@ public class StripePaymentProvider implements PaymentProvider {
 					text(object, "payment_intent"), orderId,
 					number(object, "amount_total"), text(object, "currency"),
 					"asynchronous payment failed");
+			// A declined card inside Checkout: the buyer can try another card in the same session.
 			case "payment_intent.payment_failed" -> new WebhookOutcome(
-					event.getId(), type, WebhookResultKind.FAILED, null, providerRef, orderId,
+					event.getId(), type, WebhookResultKind.ATTEMPT_FAILED, null, providerRef, orderId,
 					number(object, "amount"), text(object, "currency"),
 					"payment failed: " + text(child(object, "last_payment_error"), "message"));
 			case "charge.refunded" -> new WebhookOutcome(
@@ -188,6 +189,12 @@ public class StripePaymentProvider implements PaymentProvider {
 					text(object, "payment_intent"), orderId,
 					number(object, "amount_refunded"), text(object, "currency"),
 					"charge refunded");
+			// Disputes carry no metadata; the order is found by its PaymentIntent.
+			case "charge.dispute.created" -> new WebhookOutcome(
+					event.getId(), type, WebhookResultKind.DISPUTED, null,
+					text(object, "payment_intent"), orderId,
+					number(object, "amount"), text(object, "currency"),
+					"payment disputed: " + text(object, "reason"));
 			default -> new WebhookOutcome(
 					event.getId(), type, WebhookResultKind.IGNORED, providerRef, null, orderId,
 					0L, null, "unhandled event type");

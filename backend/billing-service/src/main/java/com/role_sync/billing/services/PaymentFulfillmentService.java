@@ -27,7 +27,7 @@ import java.util.UUID;
  * signed provider callback.
  *
  * <p>It is safe to call repeatedly, which matters because every gateway retries: the event id is
- * unique, only a non-terminal order transitions, and the ledger credits an order once.
+ * unique, a settled order never settles again, and the ledger credits an order once.
  */
 @Service
 public class PaymentFulfillmentService {
@@ -83,8 +83,10 @@ public class PaymentFulfillmentService {
 		return switch (outcome.kind()) {
 			case PAID -> markPaid(order, outcome);
 			case FAILED -> transitionTo(order, PaymentStatus.FAILED, outcome.message());
+			case ATTEMPT_FAILED -> noteFailedAttempt(order, outcome.message());
 			case EXPIRED -> transitionTo(order, PaymentStatus.EXPIRED, outcome.message());
-			case REFUNDED -> refund(order);
+			case REFUNDED -> refund(order, outcome);
+			case DISPUTED -> dispute(order, outcome);
 			case IGNORED -> "ignored: " + outcome.message();
 		};
 	}
@@ -93,10 +95,14 @@ public class PaymentFulfillmentService {
 		if (order.getStatus() == PaymentStatus.SUCCEEDED) {
 			return "already settled";
 		}
-		if (order.getStatus().isTerminal()) {
-			log.warn("Order {} is {} but received a paid webhook; not changing it",
-					order.getId(), order.getStatus());
+		if (order.getStatus() == PaymentStatus.REFUNDED) {
+			log.warn("Order {} is REFUNDED but received a paid webhook; not changing it", order.getId());
 			return "conflict: order already " + order.getStatus();
+		}
+		if (order.getStatus().isTerminal()) {
+			// Money was collected after we had closed the order (events can arrive out of order).
+			// The buyer paid, so they get their credits; refusing would keep money for nothing.
+			log.warn("Order {} was {} but the provider reports it paid; settling it", order.getId(), order.getStatus());
 		}
 
 		// Cross-check what the gateway says was charged against what we asked for. A mismatch
@@ -156,9 +162,42 @@ public class PaymentFulfillmentService {
 		return status.name().toLowerCase();
 	}
 
-	private String refund(PaymentOrder order) {
+	/**
+	 * A chargeback is the classic credit fraud: buy, spend, then dispute. Spending stops at once by
+	 * suspending the workspace's credits; a super admin reactivates it once the dispute is resolved.
+	 */
+	private String dispute(PaymentOrder order, WebhookOutcome outcome) {
+		String reason = "Payment disputed for order " + order.getId() + " (" + outcome.message() + ")";
+		order.setFailureReason(reason.length() <= 500 ? reason : reason.substring(0, 500));
+		orders.save(order);
+		ledger.suspend(order.getAccountId(), reason, null);
+		log.warn("Order {} disputed; suspended credits for workspace {}", order.getId(), order.getAccountId());
+		return "disputed; workspace credits suspended";
+	}
+
+	private String noteFailedAttempt(PaymentOrder order, String reason) {
+		if (order.getStatus().isTerminal()) {
+			return "ignored: order already " + order.getStatus();
+		}
+		// Keep the order open: the same checkout can still be paid with another card.
+		order.setFailureReason(reason == null ? null : reason.length() <= 500 ? reason : reason.substring(0, 500));
+		orders.save(order);
+		return "attempt failed; checkout still open";
+	}
+
+	private String refund(PaymentOrder order, WebhookOutcome outcome) {
 		if (order.getStatus() != PaymentStatus.SUCCEEDED) {
 			return "ignored: refund for a " + order.getStatus() + " order";
+		}
+		if (outcome.amountMinor() > 0 && outcome.amountMinor() < order.getAmountMinor()) {
+			// A partial refund is a support decision about how many credits to take back, so it is
+			// recorded for a super admin to settle with a deduct instead of guessed here.
+			log.warn("Order {} partially refunded ({} of {} {}); credits left unchanged for manual review",
+					order.getId(), outcome.amountMinor(), order.getAmountMinor(), order.getCurrency());
+			order.setFailureReason("partial refund of " + outcome.amountMinor() + " " + order.getCurrency()
+					+ "; review credits");
+			orders.save(order);
+			return "partial refund recorded; credits unchanged";
 		}
 		order.setStatus(PaymentStatus.REFUNDED);
 		orders.save(order);

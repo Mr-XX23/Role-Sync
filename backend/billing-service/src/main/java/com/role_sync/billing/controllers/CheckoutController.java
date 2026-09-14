@@ -5,6 +5,7 @@ import com.role_sync.billing.dto.PaymentOrderResponse;
 import com.role_sync.billing.models.PaymentOrder;
 import com.role_sync.billing.security.WorkspaceMembershipGuard;
 import com.role_sync.billing.services.CheckoutService;
+import com.role_sync.billing.services.CreditLedgerService;
 import com.role_sync.billing.utils.CallerIdentity;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
@@ -26,10 +27,13 @@ public class CheckoutController {
 
 	private final CheckoutService checkoutService;
 	private final WorkspaceMembershipGuard membership;
+	private final CreditLedgerService ledger;
 
-	public CheckoutController(CheckoutService checkoutService, WorkspaceMembershipGuard membership) {
+	public CheckoutController(CheckoutService checkoutService, WorkspaceMembershipGuard membership,
+	                          CreditLedgerService ledger) {
 		this.checkoutService = checkoutService;
 		this.membership = membership;
+		this.ledger = ledger;
 	}
 
 	@PostMapping("/checkout")
@@ -42,13 +46,14 @@ public class CheckoutController {
 		UUID userId = CallerIdentity.requireUserId(userIdHeader);
 		UUID workspaceId = CallerIdentity.requireWorkspaceId(tenantHeader, request.workspaceId());
 		membership.requireMember(userId, workspaceId);
+		ledger.requireCanPurchase(workspaceId, userId);
 
 		PaymentOrder order = checkoutService.start(
 				userId,
 				workspaceId,
 				request.packageCode(),
 				request.providerOrDefault(),
-				idempotencyKey);
+				idempotencyKey != null && !idempotencyKey.isBlank() ? idempotencyKey : request.idempotencyKey());
 
 		return ResponseEntity.ok(PaymentOrderResponse.from(order));
 	}

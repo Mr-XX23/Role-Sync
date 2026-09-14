@@ -175,6 +175,37 @@ class PaymentFulfillmentServiceTest {
 	}
 
 	@Test
+	void aDeclinedCardKeepsTheCheckoutOpenSoARetryCanStillPay() {
+		when(events.existsByProviderAndProviderEventId(any(), any())).thenReturn(false);
+		when(orders.findById(order.getId())).thenReturn(Optional.of(order));
+
+		WebhookOutcome declined = new WebhookOutcome("evt_8", "payment_intent.payment_failed",
+				WebhookResultKind.ATTEMPT_FAILED, null, "pi_test_1", order.getId().toString(), 1000L, "usd",
+				"payment failed: Your card was declined.");
+
+		assertThat(service.process(PaymentProviderKey.STRIPE, declined)).isEqualTo("attempt failed; checkout still open");
+		assertThat(order.getStatus()).isEqualTo(PaymentStatus.PENDING);
+
+		// The buyer tries another card in the same session.
+		assertThat(service.process(PaymentProviderKey.STRIPE, paid("evt_9", 1000L, "usd"))).contains("granted 1000 credits");
+		assertThat(order.getStatus()).isEqualTo(PaymentStatus.SUCCEEDED);
+		assertThat(order.getFailureReason()).isNull();
+	}
+
+	@Test
+	void aPaymentThatSettlesAfterTheOrderWasClosedStillAddsCredits() {
+		order.setStatus(PaymentStatus.EXPIRED);
+		when(events.existsByProviderAndProviderEventId(any(), any())).thenReturn(false);
+		when(orders.findById(order.getId())).thenReturn(Optional.of(order));
+
+		String result = service.process(PaymentProviderKey.STRIPE, paid("evt_10", 1000L, "usd"));
+
+		assertThat(result).contains("granted 1000 credits");
+		assertThat(order.getStatus()).isEqualTo(PaymentStatus.SUCCEEDED);
+		verify(ledger).creditPurchase(order.getAccountId(), 1000L, order.getUserId(), order.getId());
+	}
+
+	@Test
 	void refundTakesThePurchasedCreditsBack() {
 		order.setStatus(PaymentStatus.SUCCEEDED);
 		when(events.existsByProviderAndProviderEventId(any(), any())).thenReturn(false);
@@ -188,5 +219,33 @@ class PaymentFulfillmentServiceTest {
 		assertThat(result).isEqualTo("refunded; credits removed");
 		assertThat(order.getStatus()).isEqualTo(PaymentStatus.REFUNDED);
 		verify(ledger).clawBackPurchase(order.getAccountId(), 1000L, order.getId());
+	}
+
+	@Test
+	void aChargebackSuspendsTheWorkspacesCredits() {
+		order.setStatus(PaymentStatus.SUCCEEDED);
+		order.setProviderPaymentRef("pi_test_1");
+		when(events.existsByProviderAndProviderEventId(any(), any())).thenReturn(false);
+		when(orders.findByProviderPaymentRef("pi_test_1")).thenReturn(Optional.of(order));
+
+		WebhookOutcome outcome = new WebhookOutcome("evt_12", "charge.dispute.created", WebhookResultKind.DISPUTED,
+				null, "pi_test_1", null, 1000L, "usd", "payment disputed: fraudulent");
+
+		assertThat(service.process(PaymentProviderKey.STRIPE, outcome)).isEqualTo("disputed; workspace credits suspended");
+		verify(ledger).suspend(eq(order.getAccountId()), any(), eq(null));
+	}
+
+	@Test
+	void aPartialRefundLeavesCreditsForAnAdminToSettle() {
+		order.setStatus(PaymentStatus.SUCCEEDED);
+		when(events.existsByProviderAndProviderEventId(any(), any())).thenReturn(false);
+		when(orders.findById(order.getId())).thenReturn(Optional.of(order));
+
+		WebhookOutcome outcome = new WebhookOutcome("evt_11", "charge.refunded", WebhookResultKind.REFUNDED,
+				null, "pi_test_1", order.getId().toString(), 400L, "usd", "refunded");
+
+		assertThat(service.process(PaymentProviderKey.STRIPE, outcome)).isEqualTo("partial refund recorded; credits unchanged");
+		assertThat(order.getStatus()).isEqualTo(PaymentStatus.SUCCEEDED);
+		verify(ledger, never()).clawBackPurchase(any(), anyLong(), any());
 	}
 }

@@ -47,6 +47,15 @@ public class WorkspaceMembershipGuard {
 		return role;
 	}
 
+	/** Whether the user is the workspace's OWNER. Refreshes once on a miss, like {@link #requireMember}. */
+	public boolean isOwner(UUID userId, UUID workspaceId) {
+		Map<UUID, String> memberships = lookup(userId, false);
+		if (!memberships.containsKey(workspaceId)) {
+			memberships = lookup(userId, true);
+		}
+		return "OWNER".equalsIgnoreCase(memberships.get(workspaceId));
+	}
+
 	private Map<UUID, String> lookup(UUID userId, boolean fresh) {
 		Instant now = Instant.now();
 		Cached cached = cache.get(userId);

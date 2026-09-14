@@ -12,6 +12,8 @@ import com.role_sync.billing.models.UsageEvent;
 import com.role_sync.billing.repository.CreditAccountRepository;
 import com.role_sync.billing.repository.CreditTransactionRepository;
 import com.role_sync.billing.repository.UsageEventRepository;
+import com.role_sync.billing.repository.WelcomeGrantRepository;
+import com.role_sync.billing.security.WorkspaceMembershipGuard;
 import com.role_sync.billing.utils.CreditMath;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,30 +65,57 @@ public class CreditLedgerService {
 	private final CreditAccountRepository accounts;
 	private final CreditTransactionRepository transactions;
 	private final UsageEventRepository usageEvents;
+	private final WelcomeGrantRepository welcomeGrants;
 	private final CreditAccountWriter writer;
 	private final PricingService pricing;
+	private final WorkspaceMembershipGuard workspaceRoles;
 	private final BillingProperties properties;
 
 	public CreditLedgerService(CreditAccountRepository accounts,
 	                           CreditTransactionRepository transactions,
 	                           UsageEventRepository usageEvents,
+	                           WelcomeGrantRepository welcomeGrants,
 	                           CreditAccountWriter writer,
 	                           PricingService pricing,
+	                           WorkspaceMembershipGuard workspaceRoles,
 	                           BillingProperties properties) {
 		this.accounts = accounts;
 		this.transactions = transactions;
 		this.usageEvents = usageEvents;
+		this.welcomeGrants = welcomeGrants;
 		this.writer = writer;
 		this.pricing = pricing;
+		this.workspaceRoles = workspaceRoles;
 		this.properties = properties;
 	}
 
 	/** The workspace's account, created on first contact, with the user's welcome credits if due. */
 	public CreditAccount ensureAccount(UUID workspaceId, UUID userId) {
 		writer.createIfMissing(workspaceId);
-		writer.grantWelcomeIfDue(workspaceId, userId);
+		if (welcomeDue(workspaceId, userId)) {
+			writer.grantWelcomeIfDue(workspaceId, userId);
+		}
 		return accounts.findById(workspaceId)
 				.orElseThrow(() -> new IllegalStateException("Credit account missing for " + workspaceId));
+	}
+
+	/**
+	 * Welcome credits land only in a workspace the user owns. Otherwise every person invited into a
+	 * workspace would add 500 free credits to it, and inviting throwaway accounts would farm credits.
+	 * Someone whose first contact is a workspace they were invited to gets theirs later, in their own.
+	 */
+	private boolean welcomeDue(UUID workspaceId, UUID userId) {
+		if (userId == null || properties.getCredits().getSignupGrant() <= 0 || welcomeGrants.existsById(userId)) {
+			return false;
+		}
+		try {
+			return workspaceRoles.isOwner(userId, workspaceId);
+		}
+		catch (RuntimeException unavailable) {
+			// Never block a balance read on workspace-service; the grant is retried on the next contact.
+			log.warn("Welcome credits for user {} deferred: {}", userId, unavailable.getMessage());
+			return false;
+		}
 	}
 
 	/** Whether a new paid operation may start. Never blocks work that already ran. */
@@ -102,6 +131,18 @@ public class CreditLedgerService {
 	}
 
 	/**
+	 * A suspended workspace cannot start new purchases until a super admin reactivates it. Answered
+	 * with 409, not 402, so clients do not send the buyer back to the pricing page they came from.
+	 * A checkout opened before the suspension still credits when it settles: that money was taken.
+	 */
+	public void requireCanPurchase(UUID workspaceId, UUID userId) {
+		if (ensureAccount(workspaceId, userId).isSuspended()) {
+			throw new BillingException(HttpStatus.CONFLICT, BillingException.CREDITS_SUSPENDED,
+					"Credits for this workspace are suspended, so purchases are paused. Contact support.");
+		}
+	}
+
+	/**
 	 * Charges an operation that already happened. The balance may go below zero: the work is done
 	 * and the provider has already billed us, so refusing to record it would only lose the charge.
 	 * The next check blocks further spending until credits are added.
@@ -113,9 +154,10 @@ public class CreditLedgerService {
 			return duplicateResult(command.workspaceId());
 		}
 
-		// First-contact writes commit in their own transactions before this one takes its lock.
+		// Account creation commits in its own transaction before this one takes its lock. Welcome
+		// credits are not granted here: that needs a workspace-service call, which must not run while
+		// this transaction holds a connection, and the check before the operation already granted them.
 		writer.createIfMissing(command.workspaceId());
-		writer.grantWelcomeIfDue(command.workspaceId(), command.userId());
 
 		CreditAccount account = lock(command.workspaceId());
 		if (usageEvents.existsByIdempotencyKey(command.idempotencyKey())) {

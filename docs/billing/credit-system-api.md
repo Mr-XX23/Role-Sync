@@ -6,9 +6,10 @@ first if a contract has to move.
 ## Concepts
 
 - **Credits belong to a workspace** (`X-Tenant-Id`). Members share one balance.
-- **Welcome grant:** the first time billing sees a user, that user's current workspace receives
-  **500 credits** (config `billing.credits.signup-grant`). Once per user, ever — creating more
-  workspaces does not grant again.
+- **Welcome grant:** the first time billing sees a user in a workspace they **own**, that workspace
+  receives **500 credits** (config `billing.credits.signup-grant`). Once per user, ever — creating more
+  workspaces does not grant again, and being invited into someone else's workspace adds nothing there
+  (otherwise inviting throwaway accounts would farm credits).
 - **Precision:** the ledger stores **millicredits** (1 credit = 1,000). JSON exposes credits as numbers
   with up to 3 decimals, e.g. `487.235`. UIs show whole credits (floor).
 - **Pricing:** billing-service turns reported usage into cost with a config rate card, then
@@ -97,7 +98,9 @@ Creates the account on first call and applies the welcome grant when due.
 `{"packages": [...same shape as public...], "providers": ["STRIPE"]}`
 
 ### `POST /api/v1/billing/checkout`
-Headers: `X-Tenant-Id`, optional `Idempotency-Key`. Body `{"packageCode": "STARTER"}`.
+Header `X-Tenant-Id`. Body `{"packageCode": "STARTER", "idempotencyKey": "optional, ≤100 chars"}`.
+Browsers must send the key in the body: the gateway's CORS allow-list has no `Idempotency-Key`
+header, so a browser preflight carrying it fails. Server-to-server callers may use the header instead.
 Returns an order; redirect the browser to `checkoutUrl`.
 ```json
 {"orderId": "uuid", "packageCode": "STARTER", "credits": 1000, "amountMinor": 1000, "currency": "usd",
@@ -106,6 +109,24 @@ Returns an order; redirect the browser to `checkoutUrl`.
 ```
 After payment Stripe returns to `{FRONTEND_URL}/billing/success?orderId={orderId}`; cancelling returns to
 `{FRONTEND_URL}/pricing?checkout=cancelled`.
+
+Errors: **403** `NOT_A_MEMBER`; **409** `CREDITS_SUSPENDED` while a super admin has suspended the workspace
+(purchases pause; a checkout opened earlier still credits when it settles); **400** unknown package;
+**502** Stripe refused the session.
+
+### `POST /api/v1/billing/webhooks/stripe` (public, verified by `Stripe-Signature`)
+Subscribe the Stripe endpoint (or `stripe listen`) to these events:
+
+| Event | Effect |
+|---|---|
+| `checkout.session.completed` (payment_status `paid`), `checkout.session.async_payment_succeeded` | order `SUCCEEDED`, credits added once (amount and currency must match the order) |
+| `payment_intent.payment_failed` | declined attempt noted; order stays `PENDING` so the buyer can retry |
+| `checkout.session.async_payment_failed` | order `FAILED` |
+| `checkout.session.expired` | order `EXPIRED` |
+| `charge.refunded` | full refund: order `REFUNDED`, credits removed (balance may go negative); partial refund: noted for an admin |
+| `charge.dispute.created` | workspace credits `SUSPENDED` until a super admin reactivates |
+
+A paid event that arrives after the order was marked `FAILED`/`EXPIRED` still settles it: the money was taken.
 
 ### `GET /api/v1/billing/orders/{orderId}` · `GET /api/v1/billing/orders`
 Order shape as above. Poll one order after returning from Stripe until `status` is `SUCCEEDED`

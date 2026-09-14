@@ -12,6 +12,7 @@ import com.role_sync.billing.repository.CreditTransactionRepository;
 import com.role_sync.billing.repository.PaymentOrderRepository;
 import com.role_sync.billing.repository.UsageEventRepository;
 import com.role_sync.billing.repository.WelcomeGrantRepository;
+import com.role_sync.billing.security.WorkspaceMembershipGuard;
 import com.role_sync.billing.services.CreditLedgerService.CheckResult;
 import com.role_sync.billing.services.CreditLedgerService.UsageCommand;
 import com.role_sync.billing.services.CreditLedgerService.UsageResult;
@@ -29,7 +30,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -46,9 +49,22 @@ class CreditLedgerServiceTest {
 
 	@TestConfiguration
 	static class Config {
+		/** Workspaces the test users were only invited to; every other workspace is their own. */
+		static final Set<UUID> NOT_OWNED = ConcurrentHashMap.newKeySet();
+
 		@Bean
 		BillingProperties billingProperties() {
 			return TestBillingProperties.create();
+		}
+
+		@Bean
+		WorkspaceMembershipGuard workspaceMembershipGuard() {
+			return new WorkspaceMembershipGuard(null) {
+				@Override
+				public boolean isOwner(UUID userId, UUID workspaceId) {
+					return !NOT_OWNED.contains(workspaceId);
+				}
+			};
 		}
 	}
 
@@ -96,6 +112,20 @@ class CreditLedgerServiceTest {
 	}
 
 	@Test
+	void landsWelcomeCreditsOnlyInAWorkspaceTheUserOwns() {
+		UUID user = UUID.randomUUID();
+		UUID invitedTo = UUID.randomUUID();
+		UUID own = UUID.randomUUID();
+		Config.NOT_OWNED.add(invitedTo);
+
+		// Opening a workspace they were invited to first adds nothing there...
+		assertThat(ledger.ensureAccount(invitedTo, user).getBalanceMillicredits()).isZero();
+		assertThat(ledger.check(invitedTo, user).code()).isEqualTo(BillingException.OUT_OF_CREDITS);
+		// ...and their own workspace still gets the full grant afterwards.
+		assertThat(ledger.ensureAccount(own, user).getBalanceMillicredits()).isEqualTo(500_000);
+	}
+
+	@Test
 	void refusesNewWorkWhenTheBalanceIsEmptyAndAllowsItAfterAGrant() {
 		UUID workspace = UUID.randomUUID();
 
@@ -133,8 +163,13 @@ class CreditLedgerServiceTest {
 		ledger.suspend(workspace, "chargeback investigation", admin);
 		assertThat(ledger.check(workspace, null).code()).isEqualTo(BillingException.CREDITS_SUSPENDED);
 
+		assertThatThrownBy(() -> ledger.requireCanPurchase(workspace, null))
+				.isInstanceOf(BillingException.class)
+				.satisfies(ex -> assertThat(((BillingException) ex).code()).isEqualTo(BillingException.CREDITS_SUSPENDED));
+
 		ledger.reactivate(workspace, "resolved", admin);
 		assertThat(ledger.check(workspace, null).allowed()).isTrue();
+		ledger.requireCanPurchase(workspace, null);
 		assertThat(transactions.findAll()).extracting(t -> t.getType())
 				.contains(CreditTransactionType.ACCOUNT_SUSPENDED, CreditTransactionType.ACCOUNT_REACTIVATED);
 	}

@@ -1,8 +1,9 @@
 package com.role_sync.billing.models;
 
 /**
- * Lifecycle of a payment order. Only PENDING may advance to a terminal state,
- * which is what makes webhook replay safe.
+ * Lifecycle of a payment order. PENDING advances to a terminal state; the one exception is a
+ * payment that settles after the order was marked FAILED or EXPIRED, which still becomes
+ * SUCCEEDED because the money was taken. Credits are keyed by order, so replays stay safe.
  */
 public enum PaymentStatus {
 	/** Order row created, provider checkout not yet opened. */
