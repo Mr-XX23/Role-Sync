@@ -14,6 +14,8 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.autonomy.policy import AutonomyPolicy, EscalateAllPolicy
+from app.billing.client import BillingClient
+from app.billing.metering import MeteredConnector, MeteredWebSearch, UsageMeter
 from app.config import CHECKPOINT_SCHEMA, Settings
 from app.context.manager import ContextBudget, ContextManager
 from app.context.stores import BlobStore, MemoryStore
@@ -103,6 +105,7 @@ class Container:
     context: ContextManager
     deals: DealsClient
     skills: SkillService
+    billing: BillingClient
     runner: Any = None  # SessionRunner; tests may substitute a double
     _exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack, repr=False)
 
@@ -163,7 +166,9 @@ def default_registry(
     workspaces: WorkspaceDirectory,
     deals: DealsClient,
     rep_profiles: RepProfileClient | None = None,
+    meter: UsageMeter | None = None,
 ) -> ToolRegistry:
+    """The vendor tools. With a ``meter``, every Composio action and Tavily search they make is charged."""
     definitions = []
     if connector is None:
         logger.warning(
@@ -171,6 +176,8 @@ def default_registry(
             "(documents are saved to the knowledge base)"
         )
     else:
+        if meter is not None:
+            connector = MeteredConnector(connector, meter)
         definitions += [*gmail_tools(connector), *calendar_tools(connector), *slack_tools(connector), *notion_tools(connector)]
 
     data_pipeline = DataPipelineClient(base_url=settings.data_pipeline_url, http=http)
@@ -198,6 +205,8 @@ def default_registry(
     tavily = None
     if settings.tavily_api_key and settings.tavily_api_key.get_secret_value():
         tavily = TavilySearch(api_key=settings.tavily_api_key.get_secret_value(), http=http, base_url=settings.tavily_base_url)
+        if meter is not None:
+            tavily = MeteredWebSearch(tavily, meter)
     grounding = router.can_serve(TaskSpec(purpose="web_search", messages=(), web_grounded=True))
     if tavily is None and not grounding:
         logger.warning("no web search backend (TAVILY_API_KEY or GEMINI_API_KEY); web tools are unavailable")
@@ -236,11 +245,24 @@ async def build_container(
             open_checkpointer(settings.psycopg_conninfo, schema=CHECKPOINT_SCHEMA)
         )
 
+        billing = BillingClient(
+            base_url=settings.billing_service_url,
+            token=settings.internal_service_token.get_secret_value() if settings.internal_service_token else None,
+            http=http_client,
+            redis=redis,
+            enabled=settings.billing_enabled,
+        )
+        # Registered after Redis and the HTTP client, so it closes before them: charges still on their
+        # way get to finish, or to queue themselves for the retry.
+        stack.push_async_callback(billing.aclose)
+        meter = UsageMeter(billing)
+
         tracer = tracer or build_tracer(settings)
         model_router = ModelRouter(
             providers if providers is not None else build_providers(settings, http_client),
             routing_rules(settings),
             tracer,
+            meter=meter,
         )
         workspaces = WorkspaceDirectory(
             base_url=settings.workspace_service_url,
@@ -269,6 +291,7 @@ async def build_container(
                 workspaces=workspaces,
                 deals=deals,
                 rep_profiles=rep_profiles,
+                meter=meter,
             )
         # The agent's own memory is always available (it depends on nothing outside the engine).
         for definition in memory_tools(memory, blobs, workspaces, deals, facts_per_key=settings.memory_facts_per_key):
@@ -378,6 +401,7 @@ async def build_container(
             context=context,
             deals=deals,
             skills=skills,
+            billing=billing,
             _exit_stack=stack,
         )
         orchestrator = Orchestrator(

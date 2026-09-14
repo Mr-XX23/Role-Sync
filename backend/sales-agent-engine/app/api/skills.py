@@ -13,7 +13,7 @@ from uuid import UUID
 from fastapi import APIRouter, Path, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.deps import ContainerDep, TenantDep
+from app.api.deps import ContainerDep, TenantDep, require_credits
 from app.container import Container
 from app.core.context import TenantContext
 from app.core.enums import SkillCategory, SkillVisibility
@@ -234,7 +234,8 @@ async def preview_import(body: ImportBody, tenant: TenantDep, container: Contain
 
 @router.post("/skills/draft", response_model=SkillDraft)
 async def draft_skill(body: DraftBody, tenant: TenantDep, container: ContainerDep) -> SkillDraft:
-    """Have the model write a skill from an idea (nothing is saved)."""
+    """Have the model write a skill from an idea (nothing is saved). A model call: needs credits (402)."""
+    await require_credits(container, tenant)
     return _draft(await container.skills.draft(tenant.tenant_id, tenant.user_id, body.idea))
 
 

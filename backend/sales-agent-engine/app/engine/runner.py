@@ -26,6 +26,7 @@ from collections.abc import Coroutine
 from typing import Any
 from uuid import UUID, uuid4
 
+from app.billing.scope import context_with_usage_scope
 from app.core.context import AgentContext, RunMode
 from app.core.enums import PendingActionStatus, SessionStatus
 from app.db.models import AgentSession
@@ -309,7 +310,9 @@ class SessionRunner:
                 inputs={"input": graph_input, "resume": resume},
                 metadata={"session_id": str(ctx.session_id), "tenant_id": str(ctx.tenant_id), "mode": ctx.mode.value},
             ) as span:
-                run = asyncio.create_task(self._runtime.run(ctx, graph_input=graph_input, resume=resume))
+                # Everything the run does (model calls, searches, connector actions) is charged to its workspace.
+                billed = context_with_usage_scope(ctx.tenant_id, ctx.user_id, reference=str(ctx.session_id))
+                run = asyncio.create_task(self._runtime.run(ctx, graph_input=graph_input, resume=resume), context=billed)
                 lost = asyncio.create_task(lease.lost.wait())
                 await asyncio.wait({run, lost}, return_when=asyncio.FIRST_COMPLETED)
                 if not run.done():

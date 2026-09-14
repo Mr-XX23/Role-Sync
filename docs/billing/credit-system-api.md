@@ -195,6 +195,17 @@ Response:
   `allowed=false` instead of failing.
 - Never let a billing failure break the user's operation.
 
+**Shared retry queue.** Both services use the same Redis list and each one's retrier sends the other's
+entries, so the format and rules are part of this contract:
+- Entry: `{"payload": <usage request body>, "attempts": n, "lastError": "...", "queuedAt": <epoch seconds>}`.
+  New entries `LPUSH`; the retrier takes the oldest with `RPOP` and puts unsent ones back with `RPUSH`.
+  A bare request body (no envelope) is accepted as `attempts: 0`.
+- `POST /usage` answers: **2xx** → sent (a replay, including a same-key race, is `200` with
+  `duplicate: true`). **5xx, 401, 403, 404, 408, 409, 425, 429** or no answer → keep it and retry later under
+  the same key (401/403/404 cover a missing token or a service mid-deploy). **Any other 4xx** (400, 422) →
+  the request itself is wrong: log it with the body and drop it.
+- Give up after 50 attempts; cap the list at 100,000 entries.
+
 ---
 
 ## Super admin (logged in + platform super admin via auth-service `platform-access`)

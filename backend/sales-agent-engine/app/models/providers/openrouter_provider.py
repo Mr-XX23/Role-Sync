@@ -90,13 +90,11 @@ class OpenRouterProvider:
                     chunk = json.loads(payload)
                     if "error" in chunk:
                         error = chunk["error"] or {}
-                        raise _error_for(int(error.get("code") or 502), str(error.get("message"))[:300])
+                        failure = _error_for(int(error.get("code") or 502), str(error.get("message"))[:300])
+                        raise failure.with_usage(usage, model_used)
                     model_used = chunk.get("model") or model_used
                     if chunk.get("usage"):
-                        usage = Usage(
-                            input_tokens=int(chunk["usage"].get("prompt_tokens") or 0),
-                            output_tokens=int(chunk["usage"].get("completion_tokens") or 0),
-                        )
+                        usage = _usage(chunk["usage"])
                     for choice in chunk.get("choices") or ():
                         delta = choice.get("delta") or {}
                         if delta.get("content"):
@@ -108,7 +106,7 @@ class OpenRouterProvider:
                             _merge_tool_delta(slots, part)
                         finish_reason = choice.get("finish_reason") or finish_reason
         except httpx.HTTPError as exc:
-            raise ProviderUnavailable(f"openrouter request failed: {type(exc).__name__}") from exc
+            raise ProviderUnavailable(f"openrouter request failed: {type(exc).__name__}").with_usage(usage, model_used) from exc
         rest = markers.flush()
         if rest:
             text.append(rest)
@@ -120,12 +118,13 @@ class OpenRouterProvider:
             try:
                 arguments = json.loads(slot["arguments"] or "{}")
             except json.JSONDecodeError as exc:
-                raise ProviderError(f"openrouter returned malformed arguments for '{slot['name']}'") from exc
+                failure = ProviderError(f"openrouter returned malformed arguments for '{slot['name']}'")
+                raise failure.with_usage(usage, model_used) from exc
             calls.append(
                 ToolCall(id=slot["id"] or new_call_id(), name=slot["name"], arguments=arguments if isinstance(arguments, dict) else {})
             )
         if not text and not calls:
-            raise ProviderError(f"openrouter returned no content (finish_reason={finish_reason})")
+            raise ProviderError(f"openrouter returned no content (finish_reason={finish_reason})").with_usage(usage, model_used)
         message = Message(role=Role.ASSISTANT, content="".join(text), tool_calls=tuple(calls))
         yield StreamDone(
             Completion(message=message, provider=self.name, model=model_used, usage=usage, finish_reason=finish_reason)
@@ -192,6 +191,16 @@ def _merge_tool_delta(slots: dict[int, dict[str, Any]], part: dict[str, Any]) ->
         # Most models send the name once; some repeat it on every delta.
         slot["name"] = name if not slot["name"] else slot["name"] + name
     slot["arguments"] += function.get("arguments") or ""
+
+
+def _usage(data: dict[str, Any]) -> Usage:
+    """OpenAI-style usage: ``prompt_tokens`` includes the cached ones, ``completion_tokens`` the reasoning ones."""
+    details = data.get("prompt_tokens_details")
+    return Usage(
+        input_tokens=int(data.get("prompt_tokens") or 0),
+        output_tokens=int(data.get("completion_tokens") or 0),
+        cached_input_tokens=int((details.get("cached_tokens") if isinstance(details, dict) else 0) or 0),
+    )
 
 
 def _error_for(status: int, detail: str) -> ProviderError:

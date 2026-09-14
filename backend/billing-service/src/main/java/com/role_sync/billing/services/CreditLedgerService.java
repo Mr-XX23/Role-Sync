@@ -389,6 +389,15 @@ public class CreditLedgerService {
 				.orElseThrow(() -> new IllegalStateException("Credit account missing for " + workspaceId));
 	}
 
+	public boolean isUsageRecorded(String idempotencyKey) {
+		return idempotencyKey != null && usageEvents.existsByIdempotencyKey(idempotencyKey);
+	}
+
+	/** The answer for a usage report whose key was already recorded: nothing charged, current balance. */
+	public UsageResult alreadyRecorded(UUID workspaceId) {
+		return duplicateResult(workspaceId);
+	}
+
 	private UsageResult duplicateResult(UUID workspaceId) {
 		CreditAccount account = accounts.findById(workspaceId).orElse(null);
 		long balance = account == null ? 0 : account.getBalanceMillicredits();

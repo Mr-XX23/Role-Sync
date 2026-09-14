@@ -12,6 +12,7 @@ import com.role_sync.billing.services.CreditLedgerService.CheckResult;
 import com.role_sync.billing.services.CreditLedgerService.UsageCommand;
 import com.role_sync.billing.services.CreditLedgerService.UsageResult;
 import com.role_sync.billing.utils.CreditMath;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -65,7 +66,7 @@ public class InternalBillingController {
 		if (request == null) {
 			throw new IllegalArgumentException("A usage body is required");
 		}
-		UsageResult result = ledger.recordUsage(new UsageCommand(
+		UsageCommand command = new UsageCommand(
 				request.workspaceId(),
 				request.userId(),
 				request.operation(),
@@ -73,7 +74,19 @@ public class InternalBillingController {
 				request.idempotencyKey(),
 				request.reference(),
 				toItems(request.items()),
-				request.metadata()));
+				request.metadata());
+		UsageResult result;
+		try {
+			result = ledger.recordUsage(command);
+		}
+		catch (DataIntegrityViolationException raced) {
+			// A concurrent request recorded the same key first: to the caller that is a replay, so answer
+			// "duplicate" instead of an error its retry queue would have to interpret.
+			if (!ledger.isUsageRecorded(command.idempotencyKey())) {
+				throw raced;
+			}
+			result = ledger.alreadyRecorded(command.workspaceId());
+		}
 
 		return ResponseEntity.ok(new UsageResponse(
 				CreditMath.toCredits(result.millicreditsCharged()),

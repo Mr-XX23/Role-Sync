@@ -31,6 +31,9 @@ def create_app(settings: Settings | None = None, *, container_factory: Container
             background.append(asyncio.create_task(container.sync_worker.run_forever(), name="workspace-sync"))
         # Recovers orphaned runs and decided-but-paused sessions now, then periodically.
         background.append(asyncio.create_task(container.runner.run_maintenance(), name="run-maintenance"))
+        if container.billing.enabled:
+            # Usage billing-service couldn't take when it happened is sent again (same idempotency key).
+            background.append(asyncio.create_task(container.billing.run_pending_drainer(), name="billing-pending-usage"))
         registered = settings.eureka_enabled and await eureka.register(settings)
         try:
             yield
