@@ -6,31 +6,32 @@ import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.rolesync.authservice.models.Role;
 
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.stream.Collectors;
 
 /**
- * Custom deserializer for Role enum to handle legacy/alternative role names
- * Maps "HEALTH_PROVIDER" to "HEALTHCARE_PROVIDER" for backwards compatibility
+ * Custom deserializer for the Role enum: accepts any role name regardless of case or surrounding
+ * whitespace, plus "SUPERADMIN" as an alias for SUPER_ADMIN.
  */
 public class RoleDeserializer extends JsonDeserializer<Role> {
 
+    private static final String VALID_ROLES = Arrays.stream(Role.values())
+            .map(Role::name)
+            .collect(Collectors.joining(", "));
+
     @Override
     public Role deserialize(JsonParser parser, DeserializationContext context) throws IOException {
-        String value = parser.getText().toUpperCase().trim();
+        String value = parser.getText().toUpperCase(Locale.ROOT).trim();
 
-        // Map legacy/alternative role names
-        switch (value) {
-            case "ADMIN":
-                return Role.ADMIN;
-            case "SUPER_ADMIN":
-            case "SUPERADMIN":
-                return Role.SUPER_ADMIN;
-            case "USER":
-                return Role.USER;
-            default:
-                throw new IllegalArgumentException(
-                    String.format("Invalid role: '%s'. Valid roles are: USER, ADMIN, HEALTHCARE_PROVIDER (or HEALTH_PROVIDER), SUPER_ADMIN", value)
-                );
+        if (value.equals("SUPERADMIN")) {
+            return Role.SUPER_ADMIN;
+        }
+        try {
+            return Role.valueOf(value);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(
+                    String.format("Invalid role: '%s'. Valid roles are: %s", value, VALID_ROLES));
         }
     }
 }
-

@@ -152,7 +152,6 @@ Creates a new user account using email or phone contact details.
   "email": "jdoe@example.com",
   "phoneNumber": "+15551234567",
   "password": "StrongPassword123!",
-  "role": "USER",
   "acceptTerms": true,
   "hipaaPrivacyNotice": true
 }
@@ -164,9 +163,13 @@ Creates a new user account using email or phone contact details.
 - `email`: must be valid if provided.
 - `phoneNumber`: must match international phone format if provided.
 - `password`: required, minimum 8 characters.
-- `role`: required and deserialized into the application role type.
 - `acceptTerms`: must be `true`.
 - `hipaaPrivacyNotice`: must be `true`.
+
+**Role**
+
+The request has no `role`: every self-registered account is created as `USER`. A `role` sent by
+older clients is ignored. See the `Role` enum for where the other roles come from.
 
 **Success response**
 
