@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Sliders,
-  Key,
-  Server,
+  // Key, // hidden for now (API Credentials)
+  // Server, // hidden for now (Cluster Diagnostics)
   RotateCcw,
   Save,
   CheckCircle2,
@@ -12,7 +12,7 @@ import {
   Cpu,
 } from 'lucide-react';
 import { Button } from '../../components/common/Button';
-import { Input } from '../../components/common/Input';
+// import { Input } from '../../components/common/Input'; // hidden for now (API Credentials)
 import { useToast } from '../../context/ToastContext';
 import { useAppSelector } from '../../store';
 import {
@@ -38,10 +38,10 @@ export const Settings: React.FC = () => {
   const [isSavingRag, setIsSavingRag] = useState(false);
   const [isLoadingConfig, setIsLoadingConfig] = useState(true);
 
-  // API Credentials States
-  const [openaiKey, setOpenaiKey] = useState('sk-••••••••••••••••••••••••3a2f');
-  const [salesforceUrl, setSalesforceUrl] = useState('https://na42.salesforce.com');
-  const [isSubmittingCreds, setIsSubmittingCreds] = useState(false);
+  // API Credentials States — hidden for now (the form never saved anywhere)
+  // const [openaiKey, setOpenaiKey] = useState('sk-••••••••••••••••••••••••3a2f');
+  // const [salesforceUrl, setSalesforceUrl] = useState('https://na42.salesforce.com');
+  // const [isSubmittingCreds, setIsSubmittingCreds] = useState(false);
 
   // Load Saved RAG Configuration on Mount
   useEffect(() => {
@@ -123,15 +123,15 @@ export const Settings: React.FC = () => {
     }
   };
 
-  // Save API Credentials
-  const handleSaveCredentials = (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmittingCreds(true);
-    setTimeout(() => {
-      setIsSubmittingCreds(false);
-      toast.success('Integration API credentials securely updated.', 'Credentials Updated');
-    }, 1000);
-  };
+  // Save API Credentials — hidden for now (mock: only showed a toast)
+  // const handleSaveCredentials = (e: React.FormEvent) => {
+  //   e.preventDefault();
+  //   setIsSubmittingCreds(true);
+  //   setTimeout(() => {
+  //     setIsSubmittingCreds(false);
+  //     toast.success('Integration API credentials securely updated.', 'Credentials Updated');
+  //   }, 1000);
+  // };
 
   // Preset helper descriptions
   const getPresetDescription = (key: string) => {
@@ -160,7 +160,7 @@ export const Settings: React.FC = () => {
           </span>
         </div>
         <p className="text-sm text-muted-foreground max-w-2xl leading-relaxed">
-          Calibrate document chunking, tune vector search confidence thresholds, manage API authentication keys, and inspect cluster diagnostics.
+          Calibrate document chunking and tune vector search confidence thresholds.
         </p>
       </section>
 
@@ -169,8 +169,9 @@ export const Settings: React.FC = () => {
         {[
           { id: 'all' as const, label: 'All Settings', icon: Layers },
           { id: 'rag' as const, label: 'RAG Calibration', icon: Sliders },
-          { id: 'credentials' as const, label: 'API Credentials', icon: Key },
-          { id: 'diagnostics' as const, label: 'Cluster Diagnostics', icon: Server },
+          // Hidden for now: API Credentials and Cluster Diagnostics tabs.
+          // { id: 'credentials' as const, label: 'API Credentials', icon: Key },
+          // { id: 'diagnostics' as const, label: 'Cluster Diagnostics', icon: Server },
         ].map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -416,10 +417,16 @@ export const Settings: React.FC = () => {
       )}
 
       {/* ================================================================ */}
-      {/* SECTION 2 & 3: API CREDENTIALS & CLUSTER DIAGNOSTICS             */}
+      {/* SECTION 2 & 3: API CREDENTIALS & CLUSTER DIAGNOSTICS — hidden for now */}
+      {/* Both were mock UI: credentials never saved anywhere and the       */}
+      {/* diagnostics were hardcoded strings. Restore by uncommenting.       */}
       {/* ================================================================ */}
+      {/*
+      [================================================================]
+      [SECTION 2 & 3: API CREDENTIALS & CLUSTER DIAGNOSTICS]
+      [================================================================]
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
-        {/* Core Integrations Form */}
+        [Core Integrations Form]
         {(activeTab === 'all' || activeTab === 'credentials') && (
           <div className={activeTab === 'credentials' ? 'col-span-1 lg:col-span-3' : 'col-span-1 lg:col-span-2'}>
             <form onSubmit={handleSaveCredentials} className="bg-card border border-border p-6 md:p-8 rounded-2xl shadow-2xs space-y-6 h-full flex flex-col justify-between">
@@ -430,7 +437,7 @@ export const Settings: React.FC = () => {
                 </div>
 
                 <div className="space-y-4">
-                  {/* OpenAI / OpenRouter Key */}
+                  [OpenAI / OpenRouter Key]
                   <Input
                     label="Embedding & OpenRouter API Token"
                     id="openai-key-setting"
@@ -441,7 +448,7 @@ export const Settings: React.FC = () => {
                     placeholder="sk-or-v1-..."
                   />
 
-                  {/* Salesforce CRM Target */}
+                  [Salesforce CRM Target]
                   <Input
                     label="Salesforce CRM API Target Endpoint"
                     id="salesforce-url-setting"
@@ -468,7 +475,7 @@ export const Settings: React.FC = () => {
           </div>
         )}
 
-        {/* Diagnostic Metadata Panel */}
+        [Diagnostic Metadata Panel]
         {(activeTab === 'all' || activeTab === 'diagnostics') && (
           <div className={activeTab === 'diagnostics' ? 'col-span-1 lg:col-span-3' : 'col-span-1'}>
             <div className="bg-card border border-border p-6 md:p-8 rounded-2xl shadow-2xs h-full flex flex-col justify-between space-y-6">
@@ -515,6 +522,7 @@ export const Settings: React.FC = () => {
           </div>
         )}
       </div>
+      */}
     </div>
   );
 };

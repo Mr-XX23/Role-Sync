@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Search, Menu, ChevronDown, Building2, Check } from 'lucide-react';
+import { Menu, ChevronDown, Building2, Check } from 'lucide-react';
+// import { Search } from 'lucide-react'; // hidden for now (header search box)
 import { useAppDispatch, useAppSelector } from '../../store';
 // import { setModalOpen } from '../../store/taskSlice'; // hidden for now (Deploy Agent button)
 import { rememberWorkspace, setCurrentWorkspace } from '../../store/workspaceSlice';
@@ -11,12 +12,13 @@ const ROLE_LABEL: Record<string, string> = { OWNER: 'Owner', ADMIN: 'Admin', MEM
 
 interface HeaderProps {
   onMenuToggle: () => void;
+  /** Placeholder for the header search box. The box is hidden for now, so this is currently unused. */
   searchPlaceholder?: string;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   onMenuToggle,
-  searchPlaceholder = 'Search synchronization mesh...',
+  // searchPlaceholder = 'Search synchronization mesh...', // hidden for now (header search box)
 }) => {
   const dispatch = useAppDispatch();
   const { workspaces, currentWorkspace } = useAppSelector((state) => state.workspace);
@@ -33,6 +35,8 @@ export const Header: React.FC<HeaderProps> = ({
           <Menu className="w-5 h-5" />
         </button>
 
+        {/* Header search box — hidden for now (it was never wired to a search) */}
+        {/*
         <div className="relative max-w-xs md:max-w-md w-full hidden sm:block">
           <input
             type="text"
@@ -41,6 +45,7 @@ export const Header: React.FC<HeaderProps> = ({
           />
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/80" />
         </div>
+        */}
       </div>
 
       {/* Action Mesh and Operator Section */}
