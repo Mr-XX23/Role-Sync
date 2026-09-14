@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request, status
 
 from app.container import Container
 from app.core.context import Principal, TenantContext
@@ -53,3 +53,11 @@ async def get_tenant(request: Request, principal: PrincipalDep, container: Conta
 
 
 TenantDep = Annotated[TenantContext, Depends(get_tenant)]
+
+
+async def require_credits(container: Container, tenant: TenantContext) -> None:
+    """Before a paid operation starts: 402 ``{"code", "message"}`` when billing refuses the workspace
+    (out of credits, or credits suspended). Billing unreachable lets it through."""
+    check = await container.billing.check(tenant.tenant_id, tenant.user_id)
+    if not check.allowed:
+        raise HTTPException(status.HTTP_402_PAYMENT_REQUIRED, detail={"code": check.code, "message": check.message})

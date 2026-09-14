@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.deps import ContainerDep, TenantDep
+from app.api.deps import ContainerDep, TenantDep, require_credits
 from app.config import API_PREFIX
 from app.core.context import RunMode
 from app.core.enums import SessionStatus
@@ -49,6 +49,9 @@ async def chat(body: ChatRequest, tenant: TenantDep, container: ContainerDep) ->
     if body.skill:  # checked first: a skill that can't be used shouldn't cost the rep a turn
         skill = await container.skills.pickable(tenant.tenant_id, tenant.user_id, body.skill)
         picked = {"slug": skill.slug, "name": skill.name}
+    # Credits (402), before the budgets so a refused request doesn't use up the rep's rate, and before
+    # anything starts: a refused turn creates no run, lease or event stream.
+    await require_credits(container, tenant)
     # Per-tenant budgets, before anything starts: concurrency, then cost and rate.
     limit = container.settings.max_concurrent_runs_per_tenant
     if await container.sessions.count_running(tenant.tenant_id) >= limit:

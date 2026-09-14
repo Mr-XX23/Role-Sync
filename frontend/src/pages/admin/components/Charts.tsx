@@ -90,7 +90,7 @@ export const StackedBarChart: React.FC<{
       </div>
       <div className="flex gap-[3px] mt-1.5">
         {data.map((datum, index) => (
-          <span key={`${datum.label}-axis-${index}`} className="flex-1 min-w-0 text-center text-[9px] text-muted-foreground truncate">
+          <span key={`${datum.label}-axis-${index}`} className="flex-1 min-w-0 text-center text-[9px] text-muted-foreground whitespace-nowrap">
             {index % labelEvery === 0 ? datum.label : ''}
           </span>
         ))}
@@ -190,7 +190,7 @@ export const AreaChart: React.FC<{
       </div>
       <div className="flex mt-1.5">
         {points.map((point, index) => (
-          <span key={`${point.label}-axis-${index}`} className="flex-1 min-w-0 text-center text-[9px] text-muted-foreground truncate">
+          <span key={`${point.label}-axis-${index}`} className="flex-1 min-w-0 text-center text-[9px] text-muted-foreground whitespace-nowrap">
             {index % labelEvery === 0 ? point.label : ''}
           </span>
         ))}

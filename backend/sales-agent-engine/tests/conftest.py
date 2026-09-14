@@ -56,6 +56,8 @@ def settings(rsa_keys: RsaKeys) -> Settings:
         gemini_api_key=None,
         openrouter_api_key=None,
         composio_api_key=None,
+        # No billing-service in tests; the billing tests turn it on against a fake.
+        billing_enabled=False,
         langsmith_tracing=False,
         workspace_sync_interval_seconds=0.05,
         run_lease_seconds=5,

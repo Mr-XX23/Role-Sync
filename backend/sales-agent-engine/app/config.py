@@ -151,6 +151,13 @@ class Settings(BaseSettings):
     tavily_api_key: SecretStr | None = Field(None, validation_alias=_env("TAVILY_API_KEY"))
     tavily_base_url: str = Field("https://api.tavily.com", validation_alias=_env("SALES_AGENT_TAVILY_URL"))
 
+    # --- credits (billing-service; docs/billing/credit-system-api.md) ------
+    # false: every credit check is allowed and nothing is charged
+    billing_enabled: bool = Field(True, validation_alias=_env("BILLING_ENABLED"))
+    billing_service_url: str = Field("http://billing-service:8085", validation_alias=_env("BILLING_SERVICE_URL"))
+    # the platform's service-to-service secret, sent to billing-service as X-Internal-Token
+    internal_service_token: SecretStr | None = Field(None, validation_alias=_env("INTERNAL_SERVICE_TOKEN"))
+
     # --- workspace records (goals, tasks, notes live in workspace-service) -
     workspace_sync_enabled: bool = Field(True, validation_alias=_env("SALES_AGENT_WORKSPACE_SYNC_ENABLED"))
     workspace_sync_interval_seconds: float = Field(2.0, validation_alias=_env("SALES_AGENT_WORKSPACE_SYNC_INTERVAL_SECONDS"))

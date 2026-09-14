@@ -6,6 +6,7 @@ import { Input } from '../../components/common/Input';
 import { LegalLinks } from '../../components/common/LegalLinks';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { loginUser, logoutUser, clearError } from '../../store/authSlice';
+import { redirectParam, withRedirect } from '../../utils/authRedirect';
 
 const Signin: React.FC = () => {
   const navigate = useNavigate();
@@ -23,12 +24,14 @@ const Signin: React.FC = () => {
 
   const urlError = searchParams.get('error') || (location.state as { error?: string })?.error;
   const activeError = error || (!dismissedUrlError ? urlError : null);
+  // A page that asked them to sign in first, e.g. /pricing (GuestRoute follows it once they're in).
+  const redirect = redirectParam(searchParams);
 
   React.useEffect(() => {
     if (isAuthenticated && user) {
-      navigate('/salesman', { replace: true });
+      navigate(redirect ?? '/salesman', { replace: true });
     }
-  }, [isAuthenticated, user, navigate]);
+  }, [isAuthenticated, user, navigate, redirect]);
 
   const handleSubmit = (e: React.SyntheticEvent) => {
     e.preventDefault();
@@ -267,7 +270,7 @@ const Signin: React.FC = () => {
                     href="#"
                     onClick={(e) => {
                       e.preventDefault();
-                      navigate('/register');
+                      navigate(withRedirect('/register', redirect));
                     }}
                   >
                     Register

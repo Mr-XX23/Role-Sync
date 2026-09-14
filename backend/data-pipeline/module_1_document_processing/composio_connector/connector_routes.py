@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel, Field
 from typing import Any
 from module_1_document_processing.identity import bind_identity
+from billing.preflight import require_credits_async
 from module_1_document_processing.workspace_access import WorkspaceAccess, require_workspace_member, require_writer
 from module_1_document_processing.composio_connector.connector_service import ConnectorService
 from module_1_document_processing.composio_connector.gmail_sync_manager import GmailSyncManager
@@ -20,6 +21,8 @@ from module_1_document_processing.composio_connector.enterprise_store import Ent
 # are keyed by (workspace, verified user), so callers act only on their own connected
 # accounts and only inside a workspace they belong to. Viewers can look but not change
 # anything (require_writer).
+# Routes that start paid work (config saves that start a sync, sync-now, resync, retry-failed,
+# simulated webhooks) check the workspace's credits right after that and answer 402 when it may not spend.
 router = APIRouter(tags=["Connectors"], dependencies=[Depends(bind_identity)])
 connector_service = ConnectorService()
 gmail_sync_manager = GmailSyncManager()
@@ -214,6 +217,7 @@ def disconnect_connector(source: str, access: WorkspaceAccess = Depends(require_
 @router.post("/connectors/gmail/config")
 async def save_gmail_config(req: GmailConfigRequest, access: WorkspaceAccess = Depends(require_workspace_member)):
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     res = await gmail_sync_manager.save_configuration_and_start_sync(
         user_id=access.user_id,
         tenant_id=access.workspace_id,
@@ -302,6 +306,7 @@ def get_gmail_status(access: WorkspaceAccess = Depends(require_workspace_member)
 @router.post("/connectors/gmail/sync-now")
 async def trigger_gmail_sync_now(access: WorkspaceAccess = Depends(require_workspace_member)):
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     res = await gmail_sync_manager.trigger_manual_sync(user_id=access.user_id, tenant_id=access.workspace_id)
     if res.get("status") == "locked":
         raise HTTPException(status_code=409, detail=res.get("message"))
@@ -312,6 +317,7 @@ async def trigger_gmail_sync_now(access: WorkspaceAccess = Depends(require_works
 @router.post("/connectors/gmail/resync")
 async def trigger_gmail_resync(access: WorkspaceAccess = Depends(require_workspace_member)):
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     res = await gmail_sync_manager.trigger_resync(user_id=access.user_id, tenant_id=access.workspace_id)
     if res.get("status") == "locked":
         raise HTTPException(status_code=409, detail=res.get("message"))
@@ -326,6 +332,7 @@ async def trigger_gmail_resync(access: WorkspaceAccess = Depends(require_workspa
 @router.post("/connectors/gdrive/config")
 async def save_gdrive_config(req: GDriveConfigRequest, access: WorkspaceAccess = Depends(require_workspace_member)):
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     cfg = GDriveSyncConfig(
         max_files_per_sync=req.max_files_per_sync,
         categories=req.categories,
@@ -365,6 +372,7 @@ def get_gdrive_status(access: WorkspaceAccess = Depends(require_workspace_member
 @router.post("/connectors/gdrive/sync-now")
 async def trigger_gdrive_sync_now(access: WorkspaceAccess = Depends(require_workspace_member)):
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     conn = gdrive_sync_manager.store.get_or_create_connection(tenant_id=access.workspace_id, user_id=access.user_id)
     if gdrive_sync_manager.store.is_locked(conn.connection_id):
         raise HTTPException(status_code=409, detail="A sync job is currently running for Google Drive. Please wait.")
@@ -375,6 +383,7 @@ async def trigger_gdrive_sync_now(access: WorkspaceAccess = Depends(require_work
 @router.post("/connectors/gdrive/resync")
 async def trigger_gdrive_resync(access: WorkspaceAccess = Depends(require_workspace_member)):
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     conn = gdrive_sync_manager.store.get_or_create_connection(tenant_id=access.workspace_id, user_id=access.user_id)
     if gdrive_sync_manager.store.is_locked(conn.connection_id):
         raise HTTPException(status_code=409, detail="A sync job is currently running for Google Drive. Please wait.")
@@ -403,6 +412,7 @@ def get_gdrive_activities(
 @router.post("/connectors/calendar/config")
 async def save_calendar_config(req: CalendarConfigRequest, access: WorkspaceAccess = Depends(require_workspace_member)):
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     cfg = CalendarSyncConfig(
         max_events_per_sync=req.max_events_per_sync,
         categories=req.categories if req.categories else ["PRIMARY"],
@@ -442,6 +452,7 @@ def get_calendar_status(access: WorkspaceAccess = Depends(require_workspace_memb
 @router.post("/connectors/calendar/sync-now")
 async def trigger_calendar_sync_now(access: WorkspaceAccess = Depends(require_workspace_member)):
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     conn = calendar_sync_manager.store.get_or_create_connection(tenant_id=access.workspace_id, user_id=access.user_id)
     if calendar_sync_manager.store.is_locked(conn.connection_id):
         raise HTTPException(status_code=409, detail="A sync job is currently running for Google Calendar. Please wait.")
@@ -452,6 +463,7 @@ async def trigger_calendar_sync_now(access: WorkspaceAccess = Depends(require_wo
 @router.post("/connectors/calendar/resync")
 async def trigger_calendar_resync(access: WorkspaceAccess = Depends(require_workspace_member)):
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     conn = calendar_sync_manager.store.get_or_create_connection(tenant_id=access.workspace_id, user_id=access.user_id)
     if calendar_sync_manager.store.is_locked(conn.connection_id):
         raise HTTPException(status_code=409, detail="A sync job is currently running for Google Calendar. Please wait.")
@@ -557,6 +569,7 @@ def get_source_activities(
 @router.post("/connectors/slack/config")
 async def save_slack_config(req: SlackConfigRequest, access: WorkspaceAccess = Depends(require_workspace_member)):
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     cfg = SlackSyncConfig(
         max_messages_per_sync=req.max_messages_per_sync,
         categories=req.categories if req.categories else ["PUBLIC_CHANNELS", "DIRECT_MESSAGES", "GROUP_MESSAGES"],
@@ -595,6 +608,7 @@ def get_slack_status(access: WorkspaceAccess = Depends(require_workspace_member)
 @router.post("/connectors/slack/sync-now")
 async def trigger_slack_sync_now(access: WorkspaceAccess = Depends(require_workspace_member)):
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     conn = slack_sync_manager.store.get_or_create_connection(tenant_id=access.workspace_id, user_id=access.user_id)
     if slack_sync_manager.store.is_locked(conn.connection_id):
         raise HTTPException(status_code=409, detail="A sync job is currently running for Slack. Please wait.")
@@ -605,6 +619,7 @@ async def trigger_slack_sync_now(access: WorkspaceAccess = Depends(require_works
 @router.post("/connectors/slack/resync")
 async def trigger_slack_resync(access: WorkspaceAccess = Depends(require_workspace_member)):
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     conn = slack_sync_manager.store.get_or_create_connection(tenant_id=access.workspace_id, user_id=access.user_id)
     if slack_sync_manager.store.is_locked(conn.connection_id):
         raise HTTPException(status_code=409, detail="A sync job is currently running for Slack. Please wait.")
@@ -624,6 +639,7 @@ def disconnect_slack(access: WorkspaceAccess = Depends(require_workspace_member)
 @router.post("/connectors/notion/config")
 async def save_notion_config(req: NotionConfigRequest, access: WorkspaceAccess = Depends(require_workspace_member)):
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     cfg = NotionSyncConfig(
         max_records_per_sync=req.max_records_per_sync,
         categories=req.categories if req.categories else ["PAGES", "DATABASES"],
@@ -662,6 +678,7 @@ def get_notion_status(access: WorkspaceAccess = Depends(require_workspace_member
 @router.post("/connectors/notion/sync-now")
 async def trigger_notion_sync_now(access: WorkspaceAccess = Depends(require_workspace_member)):
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     conn = notion_sync_manager.store.get_or_create_connection(tenant_id=access.workspace_id, user_id=access.user_id)
     if notion_sync_manager.store.is_locked(conn.connection_id):
         raise HTTPException(status_code=409, detail="A sync job is currently running for Notion. Please wait.")
@@ -672,6 +689,7 @@ async def trigger_notion_sync_now(access: WorkspaceAccess = Depends(require_work
 @router.post("/connectors/notion/resync")
 async def trigger_notion_resync(access: WorkspaceAccess = Depends(require_workspace_member)):
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     conn = notion_sync_manager.store.get_or_create_connection(tenant_id=access.workspace_id, user_id=access.user_id)
     if notion_sync_manager.store.is_locked(conn.connection_id):
         raise HTTPException(status_code=409, detail="A sync job is currently running for Notion. Please wait.")
@@ -765,6 +783,7 @@ async def retry_failed_items_endpoint(
 ):
     """Retries previously failed items for the specified connector without wiping clean memories."""
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     src = source.lower()
     if src == "gmail":
         return await gmail_sync_manager.retry_failed_items(user_id=access.user_id, tenant_id=access.workspace_id)
@@ -788,6 +807,7 @@ async def simulate_gmail_webhook(
     access: WorkspaceAccess = Depends(require_workspace_member),
 ):
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     import uuid
     from datetime import datetime, timezone
     from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent, EventType
@@ -826,6 +846,7 @@ async def simulate_gdrive_webhook(
     access: WorkspaceAccess = Depends(require_workspace_member),
 ):
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     import uuid
     from datetime import datetime, timezone
     from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent, EventType
@@ -863,6 +884,7 @@ async def simulate_slack_webhook(
     Simulates incoming real-time Slack webhook event (DM, group message, or channel message).
     """
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     import uuid
     from datetime import datetime, timezone
     from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent, EventType
@@ -911,6 +933,7 @@ async def simulate_notion_webhook(
     Simulates incoming real-time Notion webhook event (page update, database update, etc.).
     """
     require_writer(access)
+    await require_credits_async(access.workspace_id, access.user_id)
     import uuid
     from datetime import datetime, timezone
     from module_1_document_processing.composio_connector.events.canonical_event import CanonicalEvent, EventType

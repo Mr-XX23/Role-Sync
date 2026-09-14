@@ -17,6 +17,9 @@ import { AdminAgents } from './pages/admin/AdminAgents';
 import { AdminModels } from './pages/admin/AdminModels';
 import { AdminPrompts } from './pages/admin/AdminPrompts';
 import { AdminSupportTickets } from './pages/admin/AdminSupportTickets';
+import { AdminBilling } from './pages/admin/AdminBilling';
+import { AdminCredits } from './pages/admin/AdminCredits';
+import { AdminPayments } from './pages/admin/AdminPayments';
 import { ProtectedRoute } from './components/guards/ProtectedRoute';
 import { RegistrationFlowGuard } from './components/guards/RegistrationFlowGuard';
 import { GuestRoute } from './components/guards/GuestRoute';
@@ -35,7 +38,10 @@ import { SalesAgent } from './pages/salemans/salesAgent/SalesAgent';
 import { Skills } from './pages/salemans/skills/Skills';
 import { Deals } from './pages/salemans/deals/Deals';
 import { UserManagement } from './pages/salemans/userManagement/UserManagement';
+import { Credits } from './pages/salemans/credits/Credits';
+import { BillingSuccess } from './pages/billing/BillingSuccess';
 import { LandingPage } from './pages/marketing/LandingPage';
+import { PricingPage } from './pages/marketing/PricingPage';
 import { LegalPage } from './pages/legal/LegalPage';
 import { PageTitleManager } from './components/common/PageTitleManager';
 
@@ -69,6 +75,39 @@ export const router = createBrowserRouter([
         path: '/terms',
         element: <LegalPage slug="terms" />,
         handle: { title: 'Terms of Service' },
+      },
+      // Public pricing; signed-in visitors can buy credits for their workspace from here.
+      {
+        path: '/pricing',
+        element: <PricingPage />,
+        handle: { title: 'Pricing' },
+      },
+      // Where a cancelled checkout returns if billing-service still uses its older default cancel URL.
+      {
+        path: '/billing/cancel',
+        element: <Navigate to="/pricing?checkout=cancelled" replace />,
+      },
+      // Stripe sends buyers back here; shown inside the workspace dashboard so the balance updates in the top bar.
+      {
+        path: '/billing',
+        element: (
+          <ProtectedRoute>
+            <OnboardingGuard>
+              <DashboardLayout />
+            </OnboardingGuard>
+          </ProtectedRoute>
+        ),
+        children: [
+          {
+            path: '',
+            element: <Navigate to="/salesman/credits" replace />,
+          },
+          {
+            path: 'success',
+            element: <BillingSuccess />,
+            handle: { title: 'Payment' },
+          },
+        ],
       },
       {
         path: '/signin',
@@ -210,6 +249,11 @@ export const router = createBrowserRouter([
           //   element: <Workspace />,
           // },
           {
+            path: 'credits',
+            element: <Credits />,
+            handle: { title: 'Credits & Usage' },
+          },
+          {
             path: 'users',
             element: <UserManagement />,
             handle: { title: 'User Management' },
@@ -260,6 +304,21 @@ export const router = createBrowserRouter([
             path: 'workspaces',
             element: <AdminWorkspaces />,
             handle: { title: 'Workspaces | Admin' },
+          },
+          {
+            path: 'billing',
+            element: <AdminBilling />,
+            handle: { title: 'Billing | Admin' },
+          },
+          {
+            path: 'credits',
+            element: <AdminCredits />,
+            handle: { title: 'Credits | Admin' },
+          },
+          {
+            path: 'payments',
+            element: <AdminPayments />,
+            handle: { title: 'Payments | Admin' },
           },
           {
             path: 'support',

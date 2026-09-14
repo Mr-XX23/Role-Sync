@@ -5,6 +5,7 @@ import { useAppDispatch, useAppSelector } from '../../store';
 // import { setModalOpen } from '../../store/taskSlice'; // hidden for now (Deploy Agent button)
 import { rememberWorkspace, setCurrentWorkspace } from '../../store/workspaceSlice';
 import { ThemeToggle } from '../ThemeToggle';
+import { CreditsChip } from './CreditsChip';
 import { DashboardSwitch } from './DashboardSwitch';
 import { ProfileMenu } from './ProfileMenu';
 
@@ -121,6 +122,9 @@ export const Header: React.FC<HeaderProps> = ({
             )}
           </div>
         )}
+
+        {/* Workspace credit balance and "Buy credits" */}
+        <CreditsChip />
 
         {/* Deploy Trigger — hidden for now */}
         {/*

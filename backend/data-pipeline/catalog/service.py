@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import case, or_, func, select, text
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from billing.metering import record_openrouter_usage
 from catalog.search_ranking import SearchableProduct, rank_products
 
 from catalog.models import (
@@ -2255,6 +2256,11 @@ class ProductService:
                         )
                         if res.status_code == 200:
                             data = res.json()
+                            # Charged as catalog.ai by the route, including an attempt whose reply is unusable.
+                            record_openrouter_usage(
+                                data, model, purpose="catalog_findability",
+                                prompt_chars=len(system_prompt) + len(user_content),
+                            )
                             content = data["choices"][0]["message"]["content"].strip()
                             clean_json = re.sub(
                                 r"^```json\s*|^```\s*|```$", "", content, flags=re.MULTILINE
@@ -2477,7 +2483,13 @@ class ProductService:
             if res.status_code != 200:
                 logger.warning("catalog query expansion: OpenRouter answered %s", res.status_code)
                 return []
-            content = res.json()["choices"][0]["message"].get("content") or ""
+            body = res.json()
+            # Charged as catalog.ai by the search route.
+            record_openrouter_usage(
+                body, models[0] if models else "", purpose="catalog_query_expansion",
+                prompt_chars=len(system_prompt) + len(query) + len("Customer Query: "),
+            )
+            content = body["choices"][0]["message"].get("content") or ""
             match = re.search(r"\{.*\}", content, flags=re.DOTALL)
             parsed = json.loads(match.group(0)) if match else {}
         except Exception as exc:

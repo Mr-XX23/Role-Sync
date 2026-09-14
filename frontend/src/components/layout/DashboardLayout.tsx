@@ -13,10 +13,13 @@ import {
   Handshake,
   UserCog,
   WandSparkles,
+  Coins,
 } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import type { SidebarItem } from './Sidebar';
 import { Header } from './Header';
+import { CreditsNotice } from './CreditsNotice';
+import { CreditsProvider } from '../../context/CreditsProvider';
 import { useAppSelector } from '../../store';
 // import { useAppDispatch } from '../../store'; // hidden for now (New Agent button)
 // import { setModalOpen } from '../../store/taskSlice'; // hidden for now (New Agent button)
@@ -81,6 +84,12 @@ export const DashboardLayout: React.FC = () => {
               icon: Cable,
               path: '/salesman/external-connector',
             },
+            {
+              id: 'credits',
+              label: 'Credits & Usage',
+              icon: Coins,
+              path: '/salesman/credits',
+            },
             // Hidden for now: Agent Manager and Workspace nav items.
             // {
             //   id: 'ai-tasks',
@@ -135,38 +144,44 @@ export const DashboardLayout: React.FC = () => {
   const config = getSidebarConfig();
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex overflow-hidden">
-      {/* Sidebar Viewport */}
-      <Sidebar
-        logo={config.logo}
-        items={config.items}
-        bottomItems={config.bottomItems}
-        // actionButton={config.actionButton} // hidden for now (New Agent button)
-        isOpen={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-      />
-
-      {/* Main Console Section */}
-      <div className="flex-1 flex flex-col h-screen relative overflow-hidden">
-        {/* Header Appbar */}
-        <Header
-          onMenuToggle={() => setSidebarOpen(!sidebarOpen)}
-          searchPlaceholder="Search knowledge embeddings..."
+    // The active workspace's credit balance, for the top bar, the notice and the credit pages.
+    <CreditsProvider>
+      <div className="min-h-screen bg-background text-foreground flex overflow-hidden">
+        {/* Sidebar Viewport */}
+        <Sidebar
+          logo={config.logo}
+          items={config.items}
+          bottomItems={config.bottomItems}
+          // actionButton={config.actionButton} // hidden for now (New Agent button)
+          isOpen={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
         />
 
-        {/* Scrollable Viewport Outlet */}
-        <main className="flex-1 overflow-y-auto relative p-4 md:p-8 bg-background/50">
-          <div className="max-w-[87rem] mx-auto w-full h-full">
-            <WorkspaceGate>
-              {/* Switching workspace remounts the page, so nothing from the previous one lingers. */}
-              <Outlet key={workspaceId} />
-            </WorkspaceGate>
-          </div>
-        </main>
-      </div>
+        {/* Main Console Section */}
+        <div className="flex-1 flex flex-col h-screen relative overflow-hidden">
+          {/* Header Appbar */}
+          <Header
+            onMenuToggle={() => setSidebarOpen(!sidebarOpen)}
+            searchPlaceholder="Search knowledge embeddings..."
+          />
 
-      {/* Modal Component */}
-      <NewInstanceModal />
-    </div>
+          {/* Why a paid action was just refused (out of credits / suspended), until dismissed */}
+          <CreditsNotice />
+
+          {/* Scrollable Viewport Outlet */}
+          <main className="flex-1 overflow-y-auto relative p-4 md:p-8 bg-background/50">
+            <div className="max-w-[87rem] mx-auto w-full h-full">
+              <WorkspaceGate>
+                {/* Switching workspace remounts the page, so nothing from the previous one lingers. */}
+                <Outlet key={workspaceId} />
+              </WorkspaceGate>
+            </div>
+          </main>
+        </div>
+
+        {/* Modal Component */}
+        <NewInstanceModal />
+      </div>
+    </CreditsProvider>
   );
 };

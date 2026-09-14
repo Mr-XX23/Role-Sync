@@ -1,302 +1,279 @@
-# Role-Sync — Platform Cost Model & Credit System Design
+# Role-Sync — Cost Model & Credit System (v2)
 
-> Status: **Phase A deliverable (cost analysis)** — code-verified 2026-09-12. No billing code has been written yet.
-> This document is the source of truth for the credit economics. Numbers here are derived from the
-> actual wired code paths (four code audits) + current vendor pricing (Sept 2026), **not** from the
-> aspirational `backend/data-pipeline/doc/arch.md` design.
+> **Status:** analysis for sign-off, verified against the code on 2026-09-15. Supersedes v1 (2026-09-12).
+> Every figure is produced by [`tools/economics_v2.py`](tools/economics_v2.py); change an input there and
+> re-run rather than editing numbers by hand. No credit code exists yet. The Stripe payment service is
+> on branch `feat/billing-payment-stripe` (not merged).
 
 ---
 
-## 0. How to read this (the single most important caveat)
+## 1. The answers
 
-There are **two cost regimes** and they differ by ~100×:
+| Question | Answer |
+|---|---|
+| What does one agent message cost us? | **$0.110** on today's model (`gemini-3.5-flash`, no caching). **$0.023** on the recommended routing (§5). Averaged over simple, tool, research and heavy turns. |
+| What is one credit? | **$0.01** to the user. An action consumes `ceil(actual cost × 1.15 ÷ $0.002)` credits, so each credit is backed by at most **$0.00174** of real cost — **82.6% gross margin at list price**, before payment fees. |
+| How many credits does a message use? | **~14** on the recommended routing (5 simple · 10 tool · 51 research · 66 heavy). **64** on today's model. |
+| What should users pay? | **Free** $0 (300 credits/month) · **Starter $19** (2,500) · **Pro $49** (7,500) · **Business $149** (25,000). Top-up packs: 1,000 for $10, 5,000 for $45, 20,000 for $160. |
+| What profit do we make? | **66–80%** gross margin per plan after Stripe fees. Scenario profit margin **61%** at launch, **67%** at growth. |
+| What do free users get? | **500 welcome credits + 300 credits every month.** Worst case costs us **$1.39** in month one and **$0.52/month** after. One Starter customer pays for ~58 free workspaces. |
+| When do we break even? | Launch servers ($22/month) = **2 Starter** customers. Growth stack ($250/month) = **7 Pro** or **17 Starter**. |
+| The one decision that matters | **Move the agent's planner off `gemini-3.5-flash`.** On today's model Starter's 2,500 credits buy ~39 messages; on the recommended routing, ~180. Margin is protected either way (metered billing); value to the user is not. |
 
-| Regime | What it means | Marginal AI cost |
+---
+
+## 2. Two regimes: free tiers today, paid tiers later
+
+**Today** Gemini runs on its free tier, OpenRouter `:free` models serve the classifier, catalog AI and the
+agent's simple route, and LlamaParse (10k credits/month ≈ 3,300 pages), Composio (20k executions),
+Tavily (1k searches) and LangSmith (5k traces) sit inside free allowances. Real monthly spend is
+roughly the server.
+
+**Everything in this document is priced at paid rates**, because free tiers cannot carry customers:
+
+- OpenRouter's free models share **one 50-requests-per-day cap** across the classifier, catalog AI and the
+  agent — the first active team exhausts it.
+- **Gemini's free tier may use prompts to improve Google's products.** Customer emails, deals and documents
+  should not flow through it.
+- Free-tier rate limits throttle paying users at exactly the wrong moment.
+
+Treat the free period as runway, not margin. Upgrade before onboarding paying customers.
+
+---
+
+## 3. What changed since v1 (verified in code, 2026-09-15)
+
+| Area | v1 | Now |
 |---|---|---|
-| **Today (dev / free-tier)** | data-pipeline *chat*-LLM runs on OpenRouter `:free` models; the gatekeeper "semantic scorer" doesn't exist. **Embeddings are now REAL** (Gemini, PR #19). | **≈ $0/token for chat-LLM.** Real spend: **LlamaParse** per-page, **Gemini embeddings** per-document, and the **sales-agent-engine** on **Gemini 3.5 Flash** once its small free quota is exhausted. |
-| **At scale (production, paid)** | Free tiers are rate-limited (OpenRouter free = 50 req/day; Gemini free quota is tiny) and cannot serve real traffic. Everything must move to paid models. | This is what the credit system must be priced against. |
-
-**Do not price credits against "today ≈ $0."** Price them against the at-scale paid regime below.
-
-### The one lever that dominates everything
-
-The **sales agent turn is the platform's dominant cost**, and it currently runs on **`gemini-3.5-flash` ($1.50 in / $9.00 out per 1M)** by default (complexity defaults to HIGH). Re-routing routine planning to `gemini-2.5-flash` (5× cheaper) or `gemini-2.5-flash-lite` (~15–20× cheaper), capping output tokens, and cutting the Google-Search grounding surcharge is a **5–20× cost reduction on the dominant operation.** Decide the model/grounding strategy **before** finalizing credit prices — it changes "what $10 buys" from ~17 agent messages to ~100+.
-
----
-
-## 1. Complete cost inventory
-
-### 1.1 Variable costs (scale with user activity — the credit surface)
-
-| Cost | Provider | Billing unit | Attributable to a user? | Wired today? |
-|---|---|---|---|---|
-| LLM reasoning (agent) | Gemini | tokens (in/out) | Yes (per turn) | **Yes, paid** (`gemini-3.5-flash`) |
-| LLM web grounding | Gemini + Google Search | tokens + $/1k grounded prompts | Yes (per search) | **Yes, paid** (`gemini-2.5-flash`) |
-| Web search | Tavily | $/search | Yes (per search) | Yes, paid |
-| LLM classification / findability / query-expansion | OpenRouter | tokens | Yes (per doc/search) | Yes but **`:free` → $0** today |
-| Embeddings (index-time) | Gemini | tokens | Yes (per doc) | **Yes, paid** (`gemini-embedding-001`, 1536-dim) |
-| Embeddings (query-time) | Gemini | tokens | (per search) | **Not wired** — `embed_query()` has no callers |
-| Document parsing/OCR | LlamaParse | **$/page** | Yes (per doc) | **Yes, paid** (default tier) |
-| Tool actions (connectors) | Composio | **$/tool-execution** | Yes (per sync / per agent tool call) | Yes (reads in data-pipeline; **writes** in agent) |
-| SMS OTP | Twilio | $/segment | Yes (onboarding) | Yes, paid |
-| Avatar image storage | Cloudinary | storage + bandwidth | Yes (per avatar) | Yes (free tier covers early) |
-| Tracing | LangSmith | $/trace | Indirectly (per LLM+tool call) | Yes (`LANGSMITH_TRACING=true`) |
-| Transactional email | Gmail SMTP | ≈ free | Yes (onboarding) | Yes (≈ $0; ~500/day cap) |
-
-### 1.2 Fixed costs (paid regardless of activity — allocate across active users, do NOT charge per-op)
-
-The whole stack currently runs in one `docker-compose` (Postgres, MongoDB, Redis, Kafka+Zookeeper, config, eureka, gateway, auth, workspace, data-pipeline, sales-agent-engine). **No Neo4j, no S3, no managed Atlas** in reality. Estimated small-production footprint:
-
-| Item | Lean (self-hosted VPS) | Managed cloud |
-|---|---:|---:|
-| Compute (5 JVM + 2 Python services) | $120 | $250 |
-| Postgres | (on VM) | $60 |
-| MongoDB | (on VM) | $60 |
-| Kafka + Zookeeper | $30 | $150 |
-| Redis | (on VM) | $25 |
-| Object store (MinIO self-hosted → R2/S3 later) | (on VM) | $15 |
-| Monitoring / logging | $10 | $30 |
-| Composio platform (Pro) | $29 | $29 |
-| LlamaParse / Tavily / LangSmith floors | $0–80 | $0–110 |
-| Domain / SSL / backups | $12 | $30 |
-| **Total fixed / month** | **~$210** | **~$700** |
-
-**Baseline used in the calculator: ~$350/mo.** Fixed cost per user = $350 ÷ (active users): 50 users → $7.00; 200 → $1.75; 1,000 → $0.35. **Break-even ≈ 47–50 paying users** at a $10/mo package (75% gross margin).
+| Tools sent to the planner on every step | 33 | **50 tools, 56 schemas ≈ 15.3k tokens** (measured) |
+| Fixed input tokens per planning step | 8–12k | **~18k** — system prompt 1.6k + tool definitions 15.3k + profile and skill list 1.1k |
+| Chat attachments | — | Up to **2 files × 25 MB** per message. They are uploaded to the Knowledge Vault, run the full ingestion pipeline, then the agent reads them back with its knowledge-base tools. |
+| Gatekeeper semantic scorer | not implemented | **On by default**, `gemini-3.5-flash-lite`, scores every ingested item (uploads, attachments, each synced email, message, page, event) |
+| Embeddings | `gemini-embedding-001`, $0.15/M | **`gemini-embedding-2`, $0.20/M**; child chunks embedded with 12% overlap |
+| Reconciliation | off | **On, nightly**, Composio listings for Drive, Notion and Calendar |
+| Skills | — | Listed in the prompt; full text loads only through `use_skill`; AI drafting capped at 20 per rep per day |
+| Plans | — | `PlatformPlan` exists with `priceMonthlyCents`, `maxMembers`, `agentTokensPerDay`, `maxConcurrentAgentRuns` |
+| Reindex double-parse | leaked a LlamaParse charge | reuses stored text |
+| Hardcoded Composio key | in source | removed — still in git history, so **rotate it** |
+| Token metering | planner + sub-agents | unchanged. Provider usage (input, output, thinking) is already captured on every call. |
 
 ---
 
-## 2. Current provider pricing (config-driven — see §11.1; never hardcode)
+## 4. Vendor prices (verified September 2026)
 
-All USD, Sept 2026. Sources verified via vendor/aggregator pages.
+| Service | Unit | Price |
+|---|---|---|
+| `gemini-3.5-flash` | per 1M input / output / cached input | $1.50 / $9.00 / $0.15 |
+| `gemini-3.5-flash-lite` | per 1M | $0.30 / $2.50 / $0.03 |
+| `gemini-2.5-flash` | per 1M | $0.30 / $2.50 / $0.03 |
+| `gemini-2.5-flash-lite` | per 1M | $0.10 / $0.40 / $0.01 |
+| `gemini-embedding-2` | per 1M text tokens | $0.20 (batch $0.10) |
+| Google Search grounding | per grounded prompt | 2.5 models: $0.035 after 500/day free · 3.x models: $0.014 after 5,000/month free |
+| LlamaParse | per page, default tier | ~$0.00375 · 10k credits/month free |
+| Composio | per tool execution | $0.004 · 20k/month free · Pro $29 for 50k |
+| Tavily | per basic search | $0.008 · 1k/month free |
+| LangSmith | per trace | $0.0025 beyond 5k/month · Plus $39/seat |
+| Twilio SMS | per US A2P segment | ~$0.0125 |
+| Stripe | per payment | 2.9% + $0.30 · **international cards 4.4% + $0.30** · +1% currency conversion |
+| Hetzner CX43 | 8 vCPU · 16 GB · 160 GB | €15.99/month, +20% for backups (after the June 2026 price rise) |
 
-| Provider | Model / unit | Input | Output | Notes |
-|---|---|---:|---:|---|
-| Gemini | `gemini-3.5-flash` | $1.50 /1M | $9.00 /1M | current agent "complex" default |
-| Gemini | `gemini-2.5-flash` | $0.30 /1M | $2.50 /1M | agent grounding model |
-| Gemini | `gemini-2.5-flash-lite` | $0.10 /1M | $0.40 /1M | cheapest viable |
-| Gemini | `gemini-3.6-flash` | $0.75 /1M | $3.75 /1M | promo thru Dec'26 (then $1.50/$7.50) |
-| Gemini | `gemini-embedding-001` **(in use)** | $0.15 /1M | — | $0.075/1M via async Batch API — **not used**, code calls sync `batchEmbedContents` |
-| Gemini | Gemini Embedding 2 (successor) | $0.20 /1M | — | migration ⇒ full corpus re-embed |
-| Gemini | Google Search grounding (2.5) | $35 /1k prompts | — | 1,500/day free |
-| Gemini | Google Search grounding (3.x) | $14 /1k prompts | — | 5,000/mo free — **cheaper, prefer** |
-| OpenRouter | `:free` models | $0 | $0 | 50 req/day (1k after $10) — **not scalable** |
-| OpenRouter | paid passthrough | list | list | +5.5% on credit top-ups only |
-| LlamaParse | per page (default tier) | ~$0.00375 | — | fast $0.00125 · agentic $0.0125 · agentic+ $0.056; 10k credits/mo free |
-| Composio | tool execution (overage) | $0.004 | — | 20k/mo free; Pro $29 = 50k; trigger events $1/1k |
-| Tavily | basic search | $0.008 | — | 1k/mo free |
-| Twilio | SMS segment (US A2P) | ~$0.0125 | — | + one-time A2P registration |
-
----
-
-## 3. Per-operation cost model (at-scale, paid rates)
-
-**Metered ops** (charge on *actual* tokens): agent turn, any LLM op.
-**Flat ops** (charge per unit from config): doc parse (per page), classification (per doc), Composio (per execution), web search (per call).
-
-| Operation | External services | Calls / unit | Avg cost | Max (P99+) cost | Notes |
-|---|---|---|---:|---:|---|
-| **Document parse** | LlamaParse | 1 job / doc; per page | **$0.030** (8 pg) | **$0.19** (50 pg) | text/csv/md parse free-local; **reindex re-parses (leak, §7)** |
-| **Embedding (index-time)** | Gemini embeddings | 1 call / 100 chunks | **$0.0009** (8 pg) | **$0.006** (50 pg) | ≈ document token count (512-char chunks, **no overlap inflation**); **delta-checked** |
-| **Document classification** | OpenRouter→(paid) | 2 / doc | **$0.002** | $0.005 | ≈$0 today (free tier); trivial at paid |
-| **Reclassification** | OpenRouter→(paid) | 1 / call | **$0.002** | $0.03 | re-charges each call; reindex adds a re-parse |
-| **AI catalog search** | OpenRouter→(paid) | 1 / search | **$0.0002** | $0.001 | KB search = $0 (keyword); expansion on by default |
-| **Agent turn — simple** | Gemini 3.5F | ~2 LLM | **$0.039** | — | no tools |
-| **Agent turn — typical** | Gemini 3.5F + Tavily + grounding | ~3 LLM + 1 search | **$0.114** | — | grounding surcharge $0.035 dominates the search |
-| **Agent turn — heavy** | Gemini 3.5F ×N + searches | delegation | **$0.45** | — | 3 sub-agents × up to 6 steps |
-| **Agent turn — worst case** | Gemini 3.5F + unmetered sub-ops | near caps | — | **$2–4** | uncapped output + unmetered sub-ops (§7) |
-| **Web search (grounded)** | Gemini 2.5F + Google + Tavily | 1 | **$0.044** | $0.05 | $0.035 grounding + $0.008 Tavily |
-| **Composio action** | Composio | 1 exec | **$0.004** | $0.004 | +the agent turn that drives it |
-| **Connector sync (Gmail incremental)** | Composio | 1 exec | **$0.004** | $0.04 | historical backfill up to 10 pages |
-| **Connector sync (GDrive)** | Composio | 1 + N files | **$0.004 + $0.004·N** | — | one DOWNLOAD per file — heaviest per-item |
-| **Idle auto-sync polling** | Composio | ≥1 exec / tick | — | **$5.76–$86 / mo / connector** | 30m default → 48/day; 2m → 720/day (§7 risk) |
-| **Memory save / recall** | — | 0 LLM | **$0** | $0 | keyword + DB only |
-
-### 3.1 Agent-turn cost distribution (the operation that sets the price)
-
-| Percentile | Scenario | Cost (3.5 Flash) | Cost (2.5 Flash) | Cost (2.5 Flash-Lite) |
-|---|---|---:|---:|---:|
-| P50 | typical, 1 search | $0.11 | $0.06 | $0.05 |
-| P90 | busy, 1–2 searches | $0.30 | $0.12 | $0.08 |
-| P95 | light delegation | $0.45 | $0.15 | $0.09 |
-| P99 | heavy delegation + searches | $1.00 | $0.35 | $0.20 |
-| Max | near hard caps, uncapped output | $2–4 | $0.8–1.5 | $0.4–0.8 |
-
-> Because agent turns are **metered on actual tokens**, worst-case turns don't create a loss — the user is charged for what they consume. Protection needed is **preflight + hold**, a **per-turn credit ceiling**, and **output caps** (§6). The remaining P50→P99 spread (~10×) is why flat per-turn pricing would be a mistake.
-
-> **Actual measured distributions:** LangSmith tracing is already on. Once there is real traffic, pull true P50/P90/P95/P99 token counts per operation from LangSmith and replace these code-derived estimates. Until then these are engineering estimates from the wired token budgets.
+Thinking tokens bill as output. Images count 258 tokens per 768 px tile.
 
 ---
 
-## 4. The credit unit (derived, not guessed)
+## 5. Anatomy of an agent message
 
-**Derivation:**
-1. Target **gross margin on variable cost = 80%** → our cost must be ≤ 20% of credit revenue.
-2. Choose a clean base credit price: **1 credit = $0.01** (list).
-3. Therefore **target cost-per-credit = $0.002** (20% of $0.01).
-4. **Credits per op = ceil( our_cost × (1 + safety_buffer) / $0.002 )**, floor 1 for user-visible ops. Safety buffer default **15%**.
+Each planning step sends **~18k tokens before any conversation**. A turn repeats that for every step
+(up to 18), adds conversation history and tool results (capped at 48k per call, summarised beyond),
+and adds output — which is **not capped** on the planner.
 
-This makes the credit self-documenting: **1 credit ≈ $0.002 of our cost ≈ $0.01 of user value.**
-
-### 4.1 Recommended credit cost per operation (at current paid models)
-
-| Operation | Our cost | Credits (metered/flat) | User pays @ $0.01 |
-|---|---:|---|---:|
-| Document ingestion (parse+embed+classify), per page | $0.00386 | **2 / page** (flat) | $0.02/pg |
-| — 8-page doc (parse $0.0300 + embed $0.0009 + classify $0.0006) | $0.0315 | **~19** | $0.19 |
-| Reclassification | $0.002 | **1** (flat; +parse if reindex) | $0.01 |
-| AI catalog / KB search | $0.0002 | **1** (flat floor) | $0.01 |
-| Web search (grounded) | $0.044 | **~22** (metered) | $0.22 |
-| Agent turn — typical | $0.114 | **~57** (metered on actual) | $0.57 |
-| Agent turn — heavy | $0.45 | **~225** (metered) | $2.25 |
-| Composio action | $0.004 | **2** (flat) | $0.02 |
-| Memory op | $0 | **0 / free** | — |
-
-> **Tension to resolve:** at the current model, a typical agent message costs the user ~57 credits (~$0.57). $10 (1,000 credits) ≈ **17 messages**. Cost-optimized (2.5 Flash-Lite planning + 3.x grounding), the same message is ~8–12 credits and $10 buys **~100 messages**. Same margin, 6× more product. **This is the pricing decision, not the credit value.**
-
----
-
-## 5. Credit costs are metered on actual usage where possible
-
-- **Token-metered ops (agent turn, LLM ops):** `credits = ceil( (Σ in·price_in + Σ out·price_out + grounding_fees + tool_fees) × (1+buffer) / cost_per_credit )`, computed from **actual** token counts recorded per call.
-- **Unit-metered ops (parse/page, classify/doc, composio/exec, search/call):** flat `credits_per_unit` from the config table (§11.1), multiplied by the unit count.
-
-Flow per metered operation:
-```
-preflight estimate (estimate_task_tokens + config)
-   → check balance ≥ estimate         (else: block, prompt to buy)
-   → place HOLD (reserve estimate)     (ledger: pending)
-   → run operation, record actual tokens/units per call
-   → settle: charge actual, release hold difference   (ledger: consume)
-```
-
----
-
-## 6. Overspend / abuse safeguards (+ metering gaps that MUST be fixed first)
-
-**Guards to implement:**
-- **Preflight estimation + insufficient-credit block** (wire the already-present `estimate_task_tokens()` in `sales-agent-engine/app/context/manager.py`).
-- **Per-turn max credit ceiling** → maps onto existing `max_tokens_per_turn` / `TurnLimits`; halt the turn when exceeded.
-- **Per-operation max token budget** (cap `max_output_tokens` — currently unset/uncapped on planner + sub-agent calls).
-- **Hold/reserve** so concurrent turns can't double-spend a balance.
-- **Idempotent charging** (idempotency key per operation → no double-charge on retry).
-
-**Metering gaps found in the audit (fix before charging real credits, or we mis-bill / lose money):**
-1. **Uncapped output** on planner + sub-agent calls (`orchestrator.py`) — set `max_output_tokens`.
-2. **Unmetered sub-operations** — grounded web answer, prospect brief, and conversation summarization call the model directly and **never record tokens** to the budget (they bypass both the per-turn cap and the tenant budget). Route them through the same token recorder.
-3. **Preflight is a cap-check, not a cost estimate** — `admit_turn` gates on cumulative daily tokens but doesn't estimate the incoming turn, so one turn can overshoot.
-4. **data-pipeline chat-LLM is unmetered** (fine at $0 on free tier; must be metered when moved to paid).
-
----
-
-## 7. Cost leaks & correctness bugs found (spend control)
-
-| # | Issue | File | Impact | Fix |
-|---|---|---|---|---|
-| 1 | **Reindex re-parses via LlamaParse** from raw bytes even though parsed text is already stored | `knowledge_vault_routes.py:1041` | Duplicate per-page charge on every reindex (**embedding** is now protected by the Postgres delta check; **parsing is not**) | Reuse stored `raw_document_store` text; only re-parse if bytes changed |
-| 2 | Errored/0-chunk re-upload re-parses | `knowledge_vault_routes.py:600` | Duplicate parse charge | Content-hash cache of parse result |
-| 3 | **Idle auto-sync polling** bills even with zero new items | `*_sync_manager.py` | $5.76–$86 /mo /connector | Charge credits per sync run, and/or cap min interval, and/or bill polling separately |
-| 4 | Classification default model slugs may not exist on OpenRouter (e.g. `google/gemma-4-31b-it:free`) → 404 → silent heuristic fallback | `sales_classifier.py:150,273` | Classification silently degraded (also masks cost) | Validate slugs against OpenRouter model list |
-| 5 | **Hardcoded Composio API key fallback** in source | `composio_client.py:38` | Security (committed secret) | Remove literal; require env; **rotate key** |
-| 6 | **Pseudo-vector silent fallback** — on missing key/API failure the worker writes non-semantic hash vectors into the live index | `embedding_worker.py:60-75` | Search quality silently craters **and** cost silently drops to $0, masking the outage. Mixed real/fake vectors in one index is worse than none | Route failed chunks to the DLQ / mark the doc degraded instead of writing fake vectors; alert |
-| 7 | **Async Batch API unused** — sync `batchEmbedContents` pays $0.15/M | `embedding_worker.py:_embed_batch` | 2× the batch rate on an already-async ingestion path | Move ingestion embeddings to the Batch API ($0.075/M) — a straight 50% cut |
-| 8 | Legacy embedding model in use (`gemini-embedding-001`) | `embedding_worker.py:46` | Successor is Embedding 2; migrating ⇒ re-embed whole corpus (~$9 per 10k docs) | Keep `EMBEDDING_MODEL` env-driven (already is); budget a migration |
-
----
-
-## 8. Credit ledger (append-only, balance derived)
-
-```
-credit_transactions
-------------------------------------------------
-transaction_id      uuid  pk
-account_id          uuid  (workspace_id — credits are workspace-scoped, like catalog/KB)
-type                enum  purchase | grant | consume | refund | adjust | hold | hold_release
-credits_delta       bigint  (+/-)
-balance_after       bigint  (materialized running balance for the account)
-operation           text    (e.g. agent_turn, doc_parse, composio_action) — null for purchases
-reference_id        text    (session_id / doc_id / payment_id)
-actual_cost_usd     numeric (what it actually cost us — for margin analytics)
-provider            text    (gemini | openrouter | llamaparse | composio | tavily)
-model               text
-tokens_in           bigint
-tokens_out          bigint
-units               numeric (pages / executions / searches)
-idempotency_key     text    unique
-created_at          timestamptz
-```
-- Balance = last `balance_after` per account, reconcilable as `Σ credits_delta`.
-- **Holds**: a `hold` row reserves credits at preflight; on settle, a `consume` for the actual + a `hold_release` for the remainder (or the hold is converted). Available balance = balance − open holds.
-
-## 9. Usage records (analytics / reconciliation)
-
-One row per billable call (finer-grained than the ledger; the ledger may bundle a turn's many calls into one `consume`):
-```
-usage_events(user_id, account_id, operation, provider, model,
-             input_tokens, output_tokens, units, actual_cost_usd,
-             credits_charged, request_id, session_id, created_at)
-```
-Feeds: real P50–P99 distributions, per-feature margin, "which features are loss-making," billing-dispute debugging.
-
----
-
-## 10. Money ↔ credits separation (Billing Service)
-
-```
-User pays (Stripe / eSewa)
-   → Payment succeeds  → payment_intents / invoices  (money domain)
-   → Credit purchase   → credit_transactions +N       (credit domain)
-User uses a feature
-   → Preflight + hold → run → settle → credit_transactions −actual
-   → usage_events + actual_cost_usd recorded (margin domain)
-```
-- **Billing Service** (new; already in the HLD: *Task Orchestration → Billing : Check Credits*) owns payments, plans, invoices, the ledger, and the credit-check/hold/settle API.
-- Services call `POST /billing/credits/preflight` (estimate+hold) and `POST /billing/credits/settle` (actual). Money and credits are **decoupled** — operations never touch the payment domain directly.
-
----
-
-## 11. Profitability & packages
-
-### 11.1 Config-driven pricing (never hardcode — spec §14)
-```
-provider_rates(provider, model, input_price_per_1m, output_price_per_1m,
-               request_fee, page_fee, effective_from, effective_until)
-operation_costs(operation, unit, credits_per_unit, max_credits,
-                metered boolean, effective_from, effective_until)
-credit_config(credit_list_price_usd, target_cost_per_credit_usd,
-              target_margin, safety_buffer, effective_from)
-```
-Historical cost is computed from the rate row valid at `usage_events.created_at`.
-
-### 11.2 Recommended packages
-
-| Package | Credits | Price | $/credit | Discount | Gross margin* |
+| Turn | Steps | Today's model | Credits | Recommended routing | Credits |
 |---|---:|---:|---:|---:|---:|
-| Starter | 1,000 | $10 | $0.0100 | — | 80% |
-| Growth | 5,000 | $45 | $0.0090 | 10% | 78% |
-| Pro | 20,000 | $160 | $0.0080 | 20% | 75% |
-| Business | 100,000 | $700 | $0.0070 | 30% | 71% |
+| Simple chat reply | 1 | $0.034 | 20 | $0.007 | 5 |
+| Tool turn (look something up, answer) | 3 | $0.121 | 70 | $0.016 | 10 |
+| Research turn (web search + prospect research) | 4 | $0.284 | 164 | $0.087 | 51 |
+| Heavy turn (8 steps, 2 searches) | 8 | $0.569 | 328 | $0.114 | 66 |
+| **Blended message** (50 / 35 / 12 / 3%) | | **$0.110** | **64** | **$0.023** | **14** |
 
-\* at target cost-per-credit $0.002, before payment fees (~3–4%) and fixed-cost allocation. Margin stays **≥70% even at the deepest volume discount** — this validates the $0.01 base credit price.
+**Recommended routing** = `gemini-3.5-flash-lite` as the planner, the stable prompt prefix served from
+Gemini's cache from the second step of a turn, and 3.x Google Search grounding.
 
-### 11.3 Profitability by usage level (per active user / month, blended $0.008/credit sell, $0.002 cost)
-| Level | Credits/mo | Revenue | Variable cost | Gross | Notes |
-|---|---:|---:|---:|---:|---|
-| Low | 500 | $4.0 | $1.0 | $3.0 | below fixed break-even alone |
-| Average | 2,000 | $16 | $4.0 | $12 | healthy |
-| High | 10,000 | $80 | $20 | $60 | |
-| Very high | 50,000 | $400 | $100 | $300 | |
-| Worst-case (heavy agent) | metered | metered | metered | ~75% | protected by metering + caps |
+Because agent turns are billed on the tokens the provider actually reports, these are what users pay —
+not estimates the business absorbs if wrong.
 
 ---
 
-## 12. Build plan (Phase B — after economics sign-off)
+## 6. Cost of every action (recommended routing)
 
-1. **Fix metering gaps & leaks** (§6, §7) — output caps, meter sub-ops, cache parse, verify slugs, rotate/remove Composio key.
-2. **Billing Service** (new Spring Boot service, `billing-db`): payments (Stripe + eSewa), plans, invoices.
-3. **Credit ledger + holds** (in Billing Service): schema §8, idempotent charge/hold/settle API.
-4. **Pricing config** (§11.1) + seed from §2 rates.
-5. **Preflight + settle integration**: sales-agent-engine (wire `estimate_task_tokens`, per-turn credit ceiling), data-pipeline (parse/classify/search + connector syncs), Composio actions.
-6. **Usage tracking** (§9) + **cost/margin analytics** dashboard.
-7. **Scenario tests** (low/avg/high/worst) + **launch packages**.
+| Area | Action | Our cost | Credits | Note |
+|---|---|---:|---:|---|
+| Agent | Simple chat reply | $0.0072 | 5 | $0.034 on today's model |
+| Agent | Tool turn | $0.0161 | 10 | $0.121 on today's model |
+| Agent | Research turn | $0.0871 | 51 | $0.284 on today's model |
+| Agent | Heavy turn | $0.1143 | 66 | $0.569 on today's model |
+| Agent | Web search (inside a turn) | $0.0233 | 14 | $0.044 with 2.5 grounding |
+| Agent | Prospect research (inside a turn) | $0.0403 | 24 | $0.061 today |
+| Agent | Draft a skill with AI | $0.0056 | 4 | $0.021 on 3.5 Flash |
+| Agent | Send an email / Slack message, create an event | $0.0040 | 3 | one Composio execution, plus the turn |
+| Knowledge | Upload an 8-page PDF or Office file | $0.0326 | 19 | parse $0.030 · score $0.0007 · classify $0.0006 · embed $0.0013 |
+| Knowledge | Upload a 50-page PDF | $0.1972 | 114 | parsing is ~95% |
+| Knowledge | Upload a text, CSV or Markdown file | $0.0019 | 2 | parsed locally |
+| Knowledge | Chat image attachment | $0.0048 | 3 | OCR as one LlamaParse page |
+| Knowledge | Reclassify a document | $0.0005 | 1 | free today (`openrouter/free`) |
+| Knowledge | Semantic search query | < $0.0001 | free | rate-limit instead of charging |
+| Catalog | AI catalog search | < $0.0001 | free | rate-limit instead of charging |
+| Catalog | Generate findability for a product | $0.0004 | 1 | free today |
+| Catalog | Catalog, inventory, deals, quotes, documents | $0 | free | database only |
+| Connectors | Gmail sync run (10 emails) | $0.0092 | 6 | one Composio call; each email scored and embedded |
+| Connectors | Drive sync (20 files × 5 pages) | $0.5013 | 289 | one download per file; parsing dominates |
+| Connectors | Nightly reconciliation per connected user | $0.0120 | overhead | ≈ $0.36/month; price into plans, don't charge |
+| Platform | Signup with phone OTP | $0.0125 | overhead | only when a phone number is used |
+| Platform | Invite or verification email | $0 | — | Gmail SMTP, 500/day cap |
+| Platform | LangSmith trace (per traced turn) | $0.0025 | overhead | beyond 5k/month; sample in production |
 
-**Highest-leverage optimization to decide alongside:** agent model routing (3.5 Flash → 2.5 Flash / Flash-Lite for routine planning) + grounding strategy (3.x grounding $14/1k vs 2.5 $35/1k; or Tavily-only). 5–20× on the dominant cost.
+**Heaviest surfaces:** research turns (search fees) and file-heavy connector syncs (parsing). Gate Drive
+auto-sync by plan and charge parsed pages in credits.
+
+---
+
+## 7. Fixed monthly costs
+
+| | Launch | Growth |
+|---|---:|---:|
+| Server | Hetzner CX43 + backups ≈ $21 | CPX42 + backups ≈ $91 |
+| Domain | ~$1 | ~$1 |
+| Composio | free (20k executions) | $29 |
+| LlamaParse | free (10k credits) | $50 |
+| Tavily | free (1k searches) | $30 |
+| LangSmith | free (5k traces) or off | $39, or off |
+| Transactional email | Gmail SMTP | ~$10 |
+| **Total** | **~$22** | **~$250** |
+
+Measured footprint: the 13 containers use **~2.8 GB RAM** together (+~0.4 GB for billing-service), so a
+16 GB server has room. Hetzner raised CPX and CCX prices 2–3× in June 2026; size on the cost-optimised CX
+line first.
+
+---
+
+## 8. The credit unit and how charging works
+
+- **1 credit = $0.01** at list price.
+- **Metered actions** (agent turns, any model call): `credits = ceil(actual_cost × 1.15 ÷ 0.002)`, where
+  `actual_cost` = reported input, cached input and output (including thinking) tokens × the rate valid
+  at that moment for that model.
+- **Flat actions** (parsed page, ingested item, web search, Composio execution): credits from a config
+  table, seeded with §6.
+- **Preflight → hold → settle:** estimate before a turn starts (18k × expected steps + history), refuse if
+  the balance cannot cover the hold, then settle to the actual cost and release the rest.
+- **Rates are data, not code:** effective-dated `provider_rates` and `operation_costs`, so historical usage
+  keeps the price it was charged at.
+
+---
+
+## 9. Plans, packs and margins
+
+**Model:** every workspace is on a plan — the existing `PlatformPlan` — that includes monthly credits.
+Stripe credit packs top up. Credits are pooled per workspace.
+
+| Plan | Price | Credits / month | Members | Stripe fee | Our cost if all used | Typical (60%) | Margin, all used | Margin, typical |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Free | $0 | 300 | 1 | — | $0.52 | $0.31 | — | — |
+| Starter | $19 | 2,500 | 3 | $1.14 | $4.35 | $2.61 | 71% | 80% |
+| Pro | $49 | 7,500 | 10 | $2.46 | $13.04 | $7.83 | 68% | 79% |
+| Business | $149 | 25,000 | 30 | $6.86 | $43.48 | $26.09 | 66% | 78% |
+
+| Pack | Price | Per credit | Stripe fee | Our cost | Margin |
+|---:|---:|---:|---:|---:|---:|
+| 1,000 | $10 | $0.0100 | $0.74 | $1.74 | 75% |
+| 5,000 | $45 | $0.0090 | $2.28 | $8.70 | 76% |
+| 20,000 | $160 | $0.0080 | $7.34 | $34.78 | 74% |
+
+Fees use Stripe's international card rate. **Keep every payment at $10 or more** — the $0.30 fixed fee
+takes 7.4% of a $10 payment and 10% of a $5 one.
+
+**Margin lever:** these prices target 80% margin. At a 70% target the blended message drops from ~14 to
+~9 credits, and Starter buys ~280 messages instead of ~180.
+
+---
+
+## 10. The free plan
+
+**Grant:** 500 welcome credits when the workspace is created, then 300 credits every month (no rollover).
+
+**Cost ceiling:** $1.39 in month one, $0.52/month after (≈ $0.26 at half use).
+
+**Enough for:** ~50 agent messages, 5 documents and a Gmail sync in the first month (800 credits).
+
+| Included | Limited | Paid plans only |
+|---|---|---|
+| Agent chat on the cheapest planner | Web search and prospect research: 10 / month | Sending email or Slack messages, creating events, through the agent (spam risk, not cost) |
+| Knowledge Vault: upload, search, read | Document parsing: charged in credits | Drive, Slack and Notion connectors |
+| Catalog, inventory, deals, quotes, documents | AI skill drafting: 3 / day | Auto-sync and nightly reconciliation |
+| Memory; using skills | Gmail and Calendar: read-only, manual sync | More than 1 member or 1 concurrent run |
+
+**Abuse controls:** credits only after email verification; the grant belongs to the workspace, not each
+member; a plan `agentTokensPerDay` cap (e.g. 150k) on top of the existing 10 turns/minute; no phone OTP
+required (saves $0.0125 per signup).
+
+---
+
+## 11. Unit economics
+
+| Scenario | Free workspaces | Starter | Pro | Business | Revenue | Stripe fees | AI cost | Fixed | Profit | Margin |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Launch | 50 | 5 | 2 | 0 | $193 | $11 | $42 | $22 | **$119** | 61% |
+| Early traction | 150 | 15 | 6 | 1 | $828 | $43 | $171 | $82 | **$532** | 64% |
+| Growth | 300 | 40 | 20 | 5 | $2,885 | $147 | $547 | $250 | **$1,941** | 67% |
+
+Assumptions: free workspaces use half their grant; paid plans use 60% of included credits; pack revenue of
+$0 / $100 / $400 is fully consumed.
+
+**Break-even:** a Starter customer grosses $15.26 a month, a Pro customer $38.72. Launch fixed costs need
+**2 Starter** customers; the growth stack needs **7 Pro** or **17 Starter**.
+
+---
+
+## 12. Cost levers, in order of money saved
+
+1. **Planner → `gemini-3.5-flash-lite`**, keeping 3.5 Flash for escalation — **4.8× cheaper per message**.
+2. **Tool definitions are 15.3k tokens on every step.** Bind tool groups by intent (catalog, email,
+   knowledge) — roughly halves fixed input.
+3. **Prompt caching:** cached input costs 10% of the normal price. The clock already sits at the end of the
+   system prompt; move it into the user turn so the whole 18k prefix can cache.
+4. **Cap planner and sub-agent output** and use a low thinking level for routine steps — thinking bills as
+   output.
+5. **Ground searches on 3.x** ($0.014) instead of 2.5 ($0.035). The 429s seen on 3.x were on the free tier;
+   re-test on paid.
+6. **Meter the unmetered calls:** grounded answers, prospect briefs, summaries and skill drafts.
+7. **Replace OpenRouter `:free` routes** with paid models before launch (50/day shared cap).
+8. **LangSmith:** sample or disable in production.
+9. **Embeddings through the async Batch API** (50% off) for bulk ingestion.
+10. **Rotate the Composio key.**
+
+---
+
+## 13. Build plan (after sign-off)
+
+1. **billing-service** — merge the Stripe work onto current `main`; add an append-only, idempotent,
+   workspace-scoped credit ledger with balances and holds; usage events; effective-dated pricing config;
+   plan credit grants (monthly job and welcome grant); Stripe subscriptions for plans plus one-off packs.
+2. **Internal charging API** (`X-Internal-Token`) — preflight/hold, settle, flat charge, refund.
+3. **sales-agent-engine** — hold before a turn, settle actual tokens for every model call (including
+   today's unmetered ones), refuse on insufficient credits, gate tools by plan.
+4. **data-pipeline** — charge per parsed page, per ingested item and per connector sync.
+5. **workspace-service** — add `monthlyCredits` and free-plan entitlements to `PlatformPlan`; let super
+   admins grant and adjust credits.
+6. **Frontend** — balance, plans and pricing page, Stripe checkout, usage history, out-of-credits state.
+
+---
+
+## Appendix: assumptions
+
+- 3.5 characters per token (the engine's own estimate). Output per step, including thinking: 600 for a
+  simple reply, 800 for tool and research steps, 1,000 for heavy turns.
+- Message mix: 50% simple, 35% tool, 12% research, 3% heavy.
+- A typical 8-page document ≈ 6,000 tokens; an email ≈ 500 tokens.
+- Caching assumes the 18k prefix is served from cache from the second step of a turn. Gemini's implicit
+  caching is automatic but not guaranteed.
+- Every payment uses Stripe's international card rate.
+- Once real traffic exists, replace these assumptions with measured usage from the billing usage events.

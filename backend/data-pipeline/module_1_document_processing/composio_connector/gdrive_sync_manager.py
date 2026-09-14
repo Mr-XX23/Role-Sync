@@ -4,6 +4,9 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
+from billing.connectors import metered_sync_run, metered_webhook
+from billing.metering import record_composio_execution, usage_scope
+from billing.preflight import allowed_in_background_async, background_check_async
 from module_1_document_processing.connector_privacy import document_id
 from module_1_document_processing.composio_connector.composio_client import ComposioClient
 from module_1_document_processing.composio_connector.gdrive_models import (
@@ -290,12 +293,15 @@ class GDriveSyncManager:
             "connection_id": conn.connection_id,
         }
 
+    @metered_sync_run("gdrive")
     async def start_sync_job(
         self,
         connection_id: str,
         trigger_type: GDriveTriggerType = GDriveTriggerType.MANUAL_SYNC,
         is_resync: bool = False,
     ) -> None:
+        # The run's Composio executions (listing, downloads) are charged once as connector.sync when
+        # it ends; each file it ingests is charged as document.ingest.
         job_id = f"job_gdrive_{uuid.uuid4().hex[:8]}"
         acquired = self.store.acquire_lock(connection_id=connection_id, job_id=job_id, lease_seconds=900)
         if not acquired:
@@ -483,8 +489,11 @@ class GDriveSyncManager:
             })
             return False
 
-        # Download / Extract text content
-        raw_text_content, raw_bytes = self._download_file_content(conn.user_id, file_id, mime_type, filename)
+        # Download / Extract text content. A binary file is parsed (LlamaParse) while it is downloaded;
+        # those pages belong to this file's document.ingest charge, so they are collected here and
+        # handed to the pipeline below.
+        with usage_scope() as file_usage:
+            raw_text_content, raw_bytes = self._download_file_content(conn.user_id, file_id, mime_type, filename)
 
         # Build payload structure for CanonicalEvent normalization
         payload = {
@@ -515,7 +524,8 @@ class GDriveSyncManager:
 
         try:
             # Process via QueueWorker pipeline (Security -> Parse -> Gatekeeper -> Chunker -> OpenAI -> VectorStore)
-            await self.queue_worker._process_event(event)
+            with usage_scope(file_usage):  # the pipeline joins it: one charge for the file
+                await self.queue_worker._process_event(event)
 
             # Record Synced File Lineage
             rec = SyncedFileRecord(
@@ -590,6 +600,7 @@ class GDriveSyncManager:
             args["mime_type"] = export_mime
 
         try:
+            record_composio_execution()
             res = self.composio._composio.tools.execute(
                 slug="GOOGLEDRIVE_DOWNLOAD_FILE",
                 arguments=args,
@@ -693,6 +704,7 @@ class GDriveSyncManager:
             args["pageToken"] = page_token
 
         try:
+            record_composio_execution()
             res = self.composio._composio.tools.execute(
                 slug="GOOGLEDRIVE_LIST_FILES",
                 arguments=args,
@@ -710,6 +722,7 @@ class GDriveSyncManager:
             print(f"[GDriveSyncManager] Error executing GOOGLEDRIVE_LIST_FILES: {err}")
             return [], None
 
+    @metered_webhook("gdrive")
     async def process_webhook_event(
         self,
         event: CanonicalEvent,
@@ -781,6 +794,18 @@ class GDriveSyncManager:
                 "connection_id": conn.connection_id,
             }
 
+        # Fetching and ingesting the file is paid work: a workspace that may not spend skips the event
+        # (logged). Deletions above are free and always applied.
+        credits = await background_check_async(conn.tenant_id, conn.user_id, "Google Drive webhook ingestion")
+        if not credits.allowed:
+            return {
+                "status": "skipped",
+                "reason": "Workspace credits unavailable",
+                "code": credits.code,
+                "file_id": file_id,
+                "connection_id": conn.connection_id,
+            }
+
         raw_file = None
         if raw_payload:
             inner_p = raw_payload.get("payload") if isinstance(raw_payload.get("payload"), dict) else None
@@ -817,6 +842,7 @@ class GDriveSyncManager:
         if raw_file.get("name") == "Untitled Document" or raw_file.get("mimeType") == "application/octet-stream":
             try:
                 if self.composio and self.composio._composio:
+                    record_composio_execution()
                     res = self.composio._composio.tools.execute(
                         slug="GOOGLEDRIVE_LIST_FILES",
                         arguments={"q": f"id = '{file_id}'", "pageSize": 1, "fields": "files(id, name, mimeType, size, webViewLink, modifiedTime, createdTime, owners)"},
@@ -954,6 +980,9 @@ class GDriveSyncManager:
                         continue
 
                     self._last_auto_sync_times[conn.connection_id] = now
+                    # A workspace that may not spend is skipped until its next interval (logged).
+                    if not await allowed_in_background_async(conn.tenant_id, conn.user_id, "Google Drive auto-sync"):
+                        continue
                     print(f"[GDriveSyncManager] Auto-sync triggered for {conn.connection_id} after {elapsed_seconds:.1f}s.")
                     asyncio.create_task(self.start_sync_job(conn.connection_id, trigger_type=GDriveTriggerType.AUTO_SYNC))
             except asyncio.CancelledError:
