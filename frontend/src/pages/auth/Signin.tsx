@@ -3,6 +3,7 @@ import { ArrowRight, LogOut, Home, Mail, MessageCircle, UserRoundKey, Sparkles, 
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
+import { LegalLinks } from '../../components/common/LegalLinks';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { loginUser, logoutUser, clearError } from '../../store/authSlice';
 
@@ -282,6 +283,7 @@ const Signin: React.FC = () => {
           <p className="font-mono text-[12px] text-muted-foreground/90">
             © {new Date().getFullYear()} RoleSync AI.
           </p>
+          <LegalLinks />
         </div>
 
       </main>
